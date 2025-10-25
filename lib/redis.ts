@@ -105,3 +105,139 @@ export async function cleanupOldSnapshots(): Promise<void> {
 
   await Promise.all(deletePromises);
 }
+
+/**
+ * Store positions snapshot for an account
+ * Key format: positions:{accountId}:{timestamp}
+ */
+export async function storePositionsSnapshot(
+  accountId: string,
+  positions: any
+): Promise<void> {
+  const client = getRedisClient();
+  const timestamp = Date.now();
+  const key = `positions:${accountId}:${timestamp}`;
+
+  // Store with 30 days TTL (in seconds)
+  await client.setex(key, 30 * 24 * 60 * 60, JSON.stringify(positions));
+
+  // Also store the latest snapshot with a fixed key
+  const latestKey = `positions:${accountId}:latest`;
+  await client.setex(latestKey, 30 * 24 * 60 * 60, JSON.stringify({
+    timestamp,
+    data: positions,
+  }));
+}
+
+/**
+ * Store orders/trades snapshot for an account
+ * Key format: orders:{accountId}:{timestamp}
+ */
+export async function storeOrdersSnapshot(
+  accountId: string,
+  orders: any
+): Promise<void> {
+  const client = getRedisClient();
+  const timestamp = Date.now();
+  const key = `orders:${accountId}:${timestamp}`;
+
+  // Store with 30 days TTL (in seconds)
+  await client.setex(key, 30 * 24 * 60 * 60, JSON.stringify(orders));
+
+  // Also store the latest snapshot with a fixed key
+  const latestKey = `orders:${accountId}:latest`;
+  await client.setex(latestKey, 30 * 24 * 60 * 60, JSON.stringify({
+    timestamp,
+    data: orders,
+  }));
+}
+
+/**
+ * Get latest positions snapshot for an account
+ */
+export async function getLatestPositions(
+  accountId: string
+): Promise<{ timestamp: number; data: any } | null> {
+  const client = getRedisClient();
+  const key = `positions:${accountId}:latest`;
+  const value = await client.get(key);
+  return value ? JSON.parse(value) : null;
+}
+
+/**
+ * Get latest orders snapshot for an account
+ */
+export async function getLatestOrders(
+  accountId: string
+): Promise<{ timestamp: number; data: any } | null> {
+  const client = getRedisClient();
+  const key = `orders:${accountId}:latest`;
+  const value = await client.get(key);
+  return value ? JSON.parse(value) : null;
+}
+
+/**
+ * Get positions history for an account within a time range
+ */
+export async function getPositionsHistory(
+  accountId: string,
+  startTime: number,
+  endTime: number
+): Promise<Array<{ timestamp: number; data: any }>> {
+  const client = getRedisClient();
+  const pattern = `positions:${accountId}:*`;
+  const keys = await client.keys(pattern);
+
+  const results = [];
+  for (const key of keys) {
+    if (key.endsWith(':latest')) continue; // Skip the latest key
+
+    const parts = key.split(":");
+    const timestamp = parseInt(parts[2]);
+
+    if (timestamp >= startTime && timestamp <= endTime) {
+      const value = await client.get(key);
+      if (value) {
+        results.push({
+          timestamp,
+          data: JSON.parse(value),
+        });
+      }
+    }
+  }
+
+  return results.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * Get orders history for an account within a time range
+ */
+export async function getOrdersHistory(
+  accountId: string,
+  startTime: number,
+  endTime: number
+): Promise<Array<{ timestamp: number; data: any }>> {
+  const client = getRedisClient();
+  const pattern = `orders:${accountId}:*`;
+  const keys = await client.keys(pattern);
+
+  const results = [];
+  for (const key of keys) {
+    if (key.endsWith(':latest')) continue; // Skip the latest key
+
+    const parts = key.split(":");
+    const timestamp = parseInt(parts[2]);
+
+    if (timestamp >= startTime && timestamp <= endTime) {
+      const value = await client.get(key);
+      if (value) {
+        results.push({
+          timestamp,
+          data: JSON.parse(value),
+        });
+      }
+    }
+  }
+
+  return results.sort((a, b) => a.timestamp - b.timestamp);
+}

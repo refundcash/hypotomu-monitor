@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/equity-snapshot",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/positions-snapshot",
+      "schedule": "* * * * *"
+    }
+  ]
+}
