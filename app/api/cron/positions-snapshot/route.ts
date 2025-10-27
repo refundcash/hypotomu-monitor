@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchItems } from "@/lib/directus";
 import { OKXClient } from "@/lib/okx";
 import { AsterdexClient } from "@/lib/asterdex";
-import { storePositionsSnapshot, storeOrdersSnapshot } from "@/lib/redis";
+import { storePositionsSnapshot, storeOrdersSnapshot, storeTradeHistorySnapshot } from "@/lib/redis";
 
 interface Account {
   id: string;
@@ -63,17 +63,44 @@ export async function GET(request: Request) {
 
           const asterdex = new AsterdexClient(apiKey, apiSecret, true);
 
-          // Fetch positions
-          const positionsResponse = await asterdex.getPositions(account.symbol);
+          // Fetch positions (no symbol parameter to get ALL positions)
+          const positionsResponse = await asterdex.getPositions();
           const positions = Array.isArray(positionsResponse)
             ? positionsResponse
             : positionsResponse?.data || [];
 
-          // Fetch pending orders
-          const ordersResponse = await asterdex.getPendingOrders(account.symbol);
+          // Fetch pending orders (no symbol parameter to get ALL orders)
+          const ordersResponse = await asterdex.getPendingOrders();
           const orders = Array.isArray(ordersResponse)
             ? ordersResponse
             : ordersResponse?.data || [];
+
+          // Fetch trade history for the last 7 days - ONLY for the account's configured symbol
+          const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+          const endTime = Date.now();
+          const startTime = endTime - SEVEN_DAYS_MS;
+
+          const allTrades: any[] = [];
+          const allIncome: any[] = [];
+
+          // Only fetch trade history for the account's configured symbol
+          if (account.symbol) {
+            try {
+              const trades = await asterdex.getUserTrades(account.symbol, startTime, endTime, 1000);
+              allTrades.push(...(Array.isArray(trades) ? trades : trades?.data || []));
+
+              // Add small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 200));
+
+              const income = await asterdex.getIncomeHistory(account.symbol, "REALIZED_PNL", startTime, endTime, 1000);
+              allIncome.push(...(Array.isArray(income) ? income : income?.data || []));
+
+              console.log(`[Cron] Fetched ${allTrades.length} trades and ${allIncome.length} income records for ${account.symbol}`);
+            } catch (error: any) {
+              console.error(`[Cron] Error fetching trades for ${account.symbol}:`, error.message);
+              console.error(`[Cron] Error details:`, error.response?.data || error);
+            }
+          }
 
           // Store in Redis with raw data
           await storePositionsSnapshot(account.id, {
@@ -90,17 +117,29 @@ export async function GET(request: Request) {
             raw: ordersResponse,
           });
 
+          await storeTradeHistorySnapshot(account.id, {
+            exchange: "asterdex",
+            symbol: account.symbol,
+            trades: allTrades,
+            income: allIncome,
+            fetchedAt: endTime,
+            startTime,
+            endTime,
+          });
+
           results.push({
             accountId: account.id,
             accountName: account.name,
             exchange: "asterdex",
             positionsCount: positions.length,
             ordersCount: orders.length,
+            tradesCount: allTrades.length,
+            incomeCount: allIncome.length,
             success: true,
           });
 
           console.log(
-            `[Cron] ✓ ${account.name} (asterdex): ${positions.length} positions, ${orders.length} orders`
+            `[Cron] ✓ ${account.name} (asterdex): ${positions.length} positions, ${orders.length} orders, ${allTrades.length} trades, ${allIncome.length} income`
           );
         } else {
           // OKX
@@ -158,10 +197,17 @@ export async function GET(request: Request) {
         }
       } catch (error: any) {
         console.error(`[Cron] Error processing ${account.name}:`, error.message);
+        console.error(`[Cron] Error details for ${account.name}:`, {
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          message: error.message,
+        });
         results.push({
           accountId: account.id,
           accountName: account.name,
           error: error.message,
+          errorDetails: error.response?.data || error.message,
           success: false,
         });
       }

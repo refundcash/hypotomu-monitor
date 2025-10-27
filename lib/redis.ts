@@ -241,3 +241,71 @@ export async function getOrdersHistory(
 
   return results.sort((a, b) => a.timestamp - b.timestamp);
 }
+
+/**
+ * Store trade history snapshot for an account
+ * Key format: trades:{accountId}:{timestamp}
+ */
+export async function storeTradeHistorySnapshot(
+  accountId: string,
+  tradeHistory: any
+): Promise<void> {
+  const client = getRedisClient();
+  const timestamp = Date.now();
+  const key = `trades:${accountId}:${timestamp}`;
+
+  // Store forever (no TTL)
+  await client.set(key, JSON.stringify(tradeHistory));
+
+  // Also store the latest snapshot with a fixed key (no TTL)
+  const latestKey = `trades:${accountId}:latest`;
+  await client.set(latestKey, JSON.stringify({
+    timestamp,
+    data: tradeHistory,
+  }));
+}
+
+/**
+ * Get latest trade history snapshot for an account
+ */
+export async function getLatestTradeHistory(
+  accountId: string
+): Promise<{ timestamp: number; data: any } | null> {
+  const client = getRedisClient();
+  const key = `trades:${accountId}:latest`;
+  const value = await client.get(key);
+  return value ? JSON.parse(value) : null;
+}
+
+/**
+ * Get trade history for an account within a time range
+ */
+export async function getTradeHistoryRange(
+  accountId: string,
+  startTime: number,
+  endTime: number
+): Promise<Array<{ timestamp: number; data: any }>> {
+  const client = getRedisClient();
+  const pattern = `trades:${accountId}:*`;
+  const keys = await client.keys(pattern);
+
+  const results = [];
+  for (const key of keys) {
+    if (key.endsWith(':latest')) continue; // Skip the latest key
+
+    const parts = key.split(":");
+    const timestamp = parseInt(parts[2]);
+
+    if (timestamp >= startTime && timestamp <= endTime) {
+      const value = await client.get(key);
+      if (value) {
+        results.push({
+          timestamp,
+          data: JSON.parse(value),
+        });
+      }
+    }
+  }
+
+  return results.sort((a, b) => a.timestamp - b.timestamp);
+}
