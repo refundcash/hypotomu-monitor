@@ -11,7 +11,8 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (
-          credentials?.username === process.env.ADMIN_USERNAME &&
+          credentials?.username?.toLowerCase() ===
+            process.env.ADMIN_USERNAME?.toLowerCase() &&
           credentials?.password === process.env.ADMIN_PASSWORD
         ) {
           return {

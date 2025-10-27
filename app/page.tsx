@@ -278,7 +278,6 @@ export default function HomePage() {
         <div className="text-lg">Loading...</div>
       </div>
     );
-    Hypotomu;
   }
 
   if (!session) {
