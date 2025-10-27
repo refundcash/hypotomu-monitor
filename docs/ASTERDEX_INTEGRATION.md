@@ -8,22 +8,23 @@ This guide explains how to integrate and use Asterdex accounts in the trading bo
 
 ### Account Fields
 
-In your Directus `mm_trading_accounts` collection, accounts should have the following fields:
+In your Directus `trading_accounts` collection, accounts should have the following fields:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | UUID | Yes | Unique account identifier |
-| `name` | String | Yes | Account display name |
-| `symbol` | String | Yes | Trading pair symbol (e.g., "BTCUSDT") |
-| `exchange` | String | Yes | Exchange identifier: "okx" or "asterdex" |
-| `api_key` | String | Yes | API Key for authentication |
-| `api_secret` | String | Yes | API Secret for signing requests |
-| `passphrase` | String | No | Required for OKX, not used for Asterdex |
-| `status` | String | Yes | "published" for active accounts |
+| Field        | Type   | Required | Description                              |
+| ------------ | ------ | -------- | ---------------------------------------- |
+| `id`         | UUID   | Yes      | Unique account identifier                |
+| `name`       | String | Yes      | Account display name                     |
+| `symbol`     | String | Yes      | Trading pair symbol (e.g., "BTCUSDT")    |
+| `exchange`   | String | Yes      | Exchange identifier: "okx" or "asterdex" |
+| `api_key`    | String | Yes      | API Key for authentication               |
+| `api_secret` | String | Yes      | API Secret for signing requests          |
+| `passphrase` | String | No       | Required for OKX, not used for Asterdex  |
+| `status`     | String | Yes      | "active" for active accounts             |
 
 ### Example Account Records
 
 #### Asterdex Account
+
 ```json
 {
   "id": "uuid-here",
@@ -32,11 +33,12 @@ In your Directus `mm_trading_accounts` collection, accounts should have the foll
   "exchange": "asterdex",
   "api_key": "your-asterdex-api-key",
   "api_secret": "your-asterdex-api-secret",
-  "status": "published"
+  "status": "active"
 }
 ```
 
 #### OKX Account
+
 ```json
 {
   "id": "uuid-here",
@@ -46,7 +48,7 @@ In your Directus `mm_trading_accounts` collection, accounts should have the foll
   "api_key": "your-okx-api-key",
   "api_secret": "your-okx-api-secret",
   "passphrase": "your-okx-passphrase",
-  "status": "published"
+  "status": "active"
 }
 ```
 
@@ -73,24 +75,26 @@ if (exchange === "asterdex") {
 ### 2. API Client Initialization
 
 #### Asterdex Client
+
 ```typescript
 import { AsterdexClient } from "@/lib/asterdex";
 
 const asterdex = new AsterdexClient(
-  apiKey,      // Your Asterdex API Key
-  apiSecret,   // Your Asterdex API Secret
-  true         // true for Futures API, false for Spot API
+  apiKey, // Your Asterdex API Key
+  apiSecret, // Your Asterdex API Secret
+  true // true for Futures API, false for Spot API
 );
 ```
 
 #### OKX Client
+
 ```typescript
 import { OKXClient } from "@/lib/okx";
 
 const okx = new OKXClient(
-  apiKey,      // Your OKX API Key
-  apiSecret,   // Your OKX API Secret
-  passphrase   // Your OKX passphrase
+  apiKey, // Your OKX API Key
+  apiSecret, // Your OKX API Secret
+  passphrase // Your OKX passphrase
 );
 ```
 
@@ -131,7 +135,7 @@ The `processAsterdexAccount` function normalizes Asterdex API responses to match
     equity24hAgo: number | null;
     equity24hChange: number | null;
     equity24hChangePercent: number | null;
-  };
+  }
   positions: Array<{
     side: "LONG" | "SHORT";
     contracts: number;
@@ -164,6 +168,7 @@ The `processAsterdexAccount` function normalizes Asterdex API responses to match
 ### AsterdexClient
 
 #### Constructor
+
 ```typescript
 new AsterdexClient(apiKey: string, apiSecret: string, isFutures: boolean = true)
 ```
@@ -171,12 +176,15 @@ new AsterdexClient(apiKey: string, apiSecret: string, isFutures: boolean = true)
 #### Methods
 
 ##### getAccountBalance()
+
 ```typescript
 async getAccountBalance(): Promise<any>
 ```
+
 Returns account balance information for USDT and other assets.
 
 **Response Format:**
+
 ```json
 [
   {
@@ -188,18 +196,23 @@ Returns account balance information for USDT and other assets.
 ```
 
 ##### getAccount()
+
 ```typescript
 async getAccount(): Promise<any>
 ```
+
 Returns full account information including assets and positions.
 
 ##### getPositions(symbol?)
+
 ```typescript
 async getPositions(symbol?: string): Promise<any>
 ```
+
 Returns position information for a specific symbol or all symbols.
 
 **Response Format:**
+
 ```json
 [
   {
@@ -213,12 +226,15 @@ Returns position information for a specific symbol or all symbols.
 ```
 
 ##### getPendingOrders(symbol?)
+
 ```typescript
 async getPendingOrders(symbol?: string): Promise<any>
 ```
+
 Returns pending orders for a specific symbol or all symbols.
 
 **Response Format:**
+
 ```json
 [
   {
@@ -232,12 +248,15 @@ Returns pending orders for a specific symbol or all symbols.
 ```
 
 ##### getTicker(symbol)
+
 ```typescript
 async getTicker(symbol: string): Promise<any>
 ```
+
 Returns 24-hour ticker information for a symbol.
 
 **Response Format:**
+
 ```json
 {
   "symbol": "BTCUSDT",
@@ -249,6 +268,7 @@ Returns 24-hour ticker information for a symbol.
 ```
 
 ##### placeOrder(orderData)
+
 ```typescript
 async placeOrder(orderData: OrderData): Promise<any>
 
@@ -261,18 +281,23 @@ interface OrderData {
   timeInForce?: string;
 }
 ```
+
 Places a new order on Asterdex.
 
 ##### cancelOrder(symbol, orderId)
+
 ```typescript
 async cancelOrder(symbol: string, orderId: string): Promise<any>
 ```
+
 Cancels an existing order.
 
 ##### getExchangeInfo(symbol?)
+
 ```typescript
 async getExchangeInfo(symbol?: string): Promise<any>
 ```
+
 Returns exchange trading rules and symbol information.
 
 ## Testing
@@ -281,12 +306,14 @@ Returns exchange trading rules and symbol information.
 
 To test the Asterdex integration:
 
-1. **Add an Asterdex account** to your Directus `mm_trading_accounts` collection:
+1. **Add an Asterdex account** to your Directus `trading_accounts` collection:
+
    - Set `exchange` to `"asterdex"`
    - Provide valid `api_key` and `api_secret`
-   - Set `status` to `"published"`
+   - Set `status` to `"active"`
 
 2. **Call the monitor endpoint**:
+
    ```bash
    curl -X GET http://localhost:3000/api/monitor \
      -H "Authorization: Bearer YOUR_AUTH_TOKEN"
@@ -312,23 +339,29 @@ The integration includes comprehensive error handling:
 ### Common Issues
 
 #### 1. "Missing API credentials" Error
+
 **Cause**: `api_key` or `api_secret` not set in account record.
 **Solution**: Ensure both fields are populated in Directus.
 
 #### 2. Authentication Failed
+
 **Cause**: Invalid API key or secret, or incorrect signature.
 **Solution**:
+
 - Verify API credentials are correct
 - Check that you're using the correct Asterdex API (Futures vs Spot)
 - Ensure API key has necessary permissions
 
 #### 3. Symbol Format Issues
+
 **Cause**: Different exchanges use different symbol formats.
 **Solution**:
+
 - OKX: `ETH-USDT-SWAP`
 - Asterdex: `ETHUSDT`
 
 #### 4. Rate Limiting
+
 **Cause**: Too many API requests.
 **Solution**: Asterdex allows 2400 requests/minute. Monitor `X-MBX-USED-WEIGHT-1M` header.
 
@@ -347,8 +380,9 @@ console.log("Asterdex Response - Orders:", ordersResponse);
 To migrate an existing OKX account to Asterdex:
 
 1. **Update the account record** in Directus:
+
    ```sql
-   UPDATE mm_trading_accounts
+   UPDATE trading_accounts
    SET exchange = 'asterdex',
        api_key = 'new-asterdex-api-key',
        api_secret = 'new-asterdex-api-secret',
@@ -357,6 +391,7 @@ To migrate an existing OKX account to Asterdex:
    ```
 
 2. **Update symbol format** if needed:
+
    - OKX uses dashes: `BTC-USDT-SWAP`
    - Asterdex uses no separators: `BTCUSDT`
 
@@ -375,6 +410,7 @@ Potential improvements for the Asterdex integration:
 ## Support
 
 For issues related to:
+
 - **Asterdex API**: Refer to [Asterdex API Documentation](https://github.com/asterdex/api-docs)
 - **Integration Code**: Check `/lib/asterdex.ts` and `/app/api/monitor/route.ts`
 - **Database Schema**: Review your Directus configuration

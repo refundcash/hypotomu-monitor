@@ -50,8 +50,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const accounts = await fetchItems<Account[]>("mm_trading_accounts", {
-      filter: { status: { _eq: "published" } },
+    const accounts = await fetchItems<Account[]>("trading_accounts", {
+      filter: { status: { _eq: "active" } },
       limit: -1,
       fields: ["*"],
     });
@@ -65,7 +65,9 @@ export async function GET(request: Request) {
         const passphrase = account.passphrase || process.env.OKX_PASSPHRASE;
 
         if (!apiKey || !apiSecret || !passphrase) {
-          console.log(`[CRON] Skipping ${account.name}: Missing API credentials`);
+          console.log(
+            `[CRON] Skipping ${account.name}: Missing API credentials`
+          );
           results.push({
             accountId: account.id,
             accountName: account.name,
@@ -80,7 +82,11 @@ export async function GET(request: Request) {
 
         if (balance) {
           await storeEquitySnapshot(account.id, balance.totalEquity);
-          console.log(`[CRON] Stored equity snapshot for ${account.name}: $${balance.totalEquity.toFixed(2)}`);
+          console.log(
+            `[CRON] Stored equity snapshot for ${
+              account.name
+            }: $${balance.totalEquity.toFixed(2)}`
+          );
           results.push({
             accountId: account.id,
             accountName: account.name,
@@ -97,7 +103,10 @@ export async function GET(request: Request) {
           });
         }
       } catch (error: any) {
-        console.error(`[CRON] Error processing ${account.name}:`, error.message);
+        console.error(
+          `[CRON] Error processing ${account.name}:`,
+          error.message
+        );
         results.push({
           accountId: account.id,
           accountName: account.name,

@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { fetchItems } from "@/lib/directus";
 import { OKXClient } from "@/lib/okx";
 import { AsterdexClient } from "@/lib/asterdex";
-import { storePositionsSnapshot, storeOrdersSnapshot, storeTradeHistorySnapshot } from "@/lib/redis";
+import {
+  storePositionsSnapshot,
+  storeOrdersSnapshot,
+  storeTradeHistorySnapshot,
+} from "@/lib/redis";
 
 interface Account {
   id: string;
@@ -38,8 +42,8 @@ export async function GET(request: Request) {
 
     console.log("[Cron] Starting positions snapshot job");
 
-    const accounts = await fetchItems<Account[]>("mm_trading_accounts", {
-      filter: { status: { _eq: "published" } },
+    const accounts = await fetchItems<Account[]>("trading_accounts", {
+      filter: { status: { _eq: "active" } },
       limit: -1,
       fields: ["*"],
     });
@@ -57,7 +61,9 @@ export async function GET(request: Request) {
 
         if (exchange === "asterdex") {
           if (!apiKey || !apiSecret) {
-            console.log(`[Cron] Skipping ${account.name}: Missing API credentials`);
+            console.log(
+              `[Cron] Skipping ${account.name}: Missing API credentials`
+            );
             continue;
           }
 
@@ -86,19 +92,42 @@ export async function GET(request: Request) {
           // Only fetch trade history for the account's configured symbol
           if (account.symbol) {
             try {
-              const trades = await asterdex.getUserTrades(account.symbol, startTime, endTime, 1000);
-              allTrades.push(...(Array.isArray(trades) ? trades : trades?.data || []));
+              const trades = await asterdex.getUserTrades(
+                account.symbol,
+                startTime,
+                endTime,
+                1000
+              );
+              allTrades.push(
+                ...(Array.isArray(trades) ? trades : trades?.data || [])
+              );
 
               // Add small delay to avoid rate limiting
-              await new Promise(resolve => setTimeout(resolve, 200));
+              await new Promise((resolve) => setTimeout(resolve, 200));
 
-              const income = await asterdex.getIncomeHistory(account.symbol, "REALIZED_PNL", startTime, endTime, 1000);
-              allIncome.push(...(Array.isArray(income) ? income : income?.data || []));
+              const income = await asterdex.getIncomeHistory(
+                account.symbol,
+                "REALIZED_PNL",
+                startTime,
+                endTime,
+                1000
+              );
+              allIncome.push(
+                ...(Array.isArray(income) ? income : income?.data || [])
+              );
 
-              console.log(`[Cron] Fetched ${allTrades.length} trades and ${allIncome.length} income records for ${account.symbol}`);
+              console.log(
+                `[Cron] Fetched ${allTrades.length} trades and ${allIncome.length} income records for ${account.symbol}`
+              );
             } catch (error: any) {
-              console.error(`[Cron] Error fetching trades for ${account.symbol}:`, error.message);
-              console.error(`[Cron] Error details:`, error.response?.data || error);
+              console.error(
+                `[Cron] Error fetching trades for ${account.symbol}:`,
+                error.message
+              );
+              console.error(
+                `[Cron] Error details:`,
+                error.response?.data || error
+              );
             }
           }
 
@@ -144,7 +173,9 @@ export async function GET(request: Request) {
         } else {
           // OKX
           if (!apiKey || !apiSecret || !passphrase) {
-            console.log(`[Cron] Skipping ${account.name}: Missing API credentials`);
+            console.log(
+              `[Cron] Skipping ${account.name}: Missing API credentials`
+            );
             continue;
           }
 
@@ -156,12 +187,16 @@ export async function GET(request: Request) {
             positionsResponse.code === "0" && positionsResponse.data
               ? positionsResponse.data.filter(
                   (pos: any) =>
-                    pos.instId === account.symbol && Math.abs(Number(pos.pos)) > 0
+                    pos.instId === account.symbol &&
+                    Math.abs(Number(pos.pos)) > 0
                 )
               : [];
 
           // Fetch pending orders
-          const ordersResponse = await okx.getPendingOrders("SWAP", account.symbol);
+          const ordersResponse = await okx.getPendingOrders(
+            "SWAP",
+            account.symbol
+          );
           const orders =
             ordersResponse.code === "0" && ordersResponse.data
               ? ordersResponse.data
@@ -196,7 +231,10 @@ export async function GET(request: Request) {
           );
         }
       } catch (error: any) {
-        console.error(`[Cron] Error processing ${account.name}:`, error.message);
+        console.error(
+          `[Cron] Error processing ${account.name}:`,
+          error.message
+        );
         console.error(`[Cron] Error details for ${account.name}:`, {
           status: error.response?.status,
           statusText: error.response?.statusText,

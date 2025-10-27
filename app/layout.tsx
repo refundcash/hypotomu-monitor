@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Trading Strategy Monitor",
+  title: "Hypotomu Monitor",
   description: "Monitor your trading strategy with real-time data",
 };
 

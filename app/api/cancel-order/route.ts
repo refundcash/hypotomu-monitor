@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const accounts = await fetchItems("mm_trading_accounts", {
+    const accounts = await fetchItems("trading_accounts", {
       filter: { id: { _eq: accountId } },
       fields: ["*"],
     });

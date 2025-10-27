@@ -46,8 +46,8 @@ export async function GET(request: Request) {
       );
     }
 
-    const account = await fetchItems<Account>("mm_trading_accounts", {
-      filter: { id: { _eq: accountId }, status: { _eq: "published" } },
+    const account = await fetchItems<Account>("trading_accounts", {
+      filter: { id: { _eq: accountId }, status: { _eq: "active" } },
       limit: 1,
       fields: ["*"],
     });
@@ -95,7 +95,9 @@ export async function GET(request: Request) {
 
     if (cachedData && cachedData.data) {
       const { data } = cachedData;
-      console.log(`[TradeHistory] Using cached data from Redis for account ${accountId}`);
+      console.log(
+        `[TradeHistory] Using cached data from Redis for account ${accountId}`
+      );
 
       // Filter trades by time range if specified
       let filteredTrades = data.trades || [];
@@ -119,13 +121,19 @@ export async function GET(request: Request) {
 
       // Filter by symbol if specified
       if (tradeSymbol) {
-        filteredTrades = filteredTrades.filter((trade: any) => trade.symbol === tradeSymbol);
-        filteredIncome = filteredIncome.filter((inc: any) => inc.symbol === tradeSymbol);
+        filteredTrades = filteredTrades.filter(
+          (trade: any) => trade.symbol === tradeSymbol
+        );
+        filteredIncome = filteredIncome.filter(
+          (inc: any) => inc.symbol === tradeSymbol
+        );
       }
 
       // Get current positions
       const positionsResponse = await asterdex.getPositions(tradeSymbol);
-      positions = Array.isArray(positionsResponse) ? positionsResponse : positionsResponse?.data || [];
+      positions = Array.isArray(positionsResponse)
+        ? positionsResponse
+        : positionsResponse?.data || [];
 
       return NextResponse.json({
         accountId: account.id,
@@ -139,7 +147,9 @@ export async function GET(request: Request) {
       });
     }
 
-    console.log(`[TradeHistory] No cached data found, fetching from API for account ${accountId}`);
+    console.log(
+      `[TradeHistory] No cached data found, fetching from API for account ${accountId}`
+    );
 
     // Determine which symbols to fetch
     let symbolsToFetch: string[] = [];
@@ -150,7 +160,9 @@ export async function GET(request: Request) {
     } else {
       // If no symbol specified, get all positions and extract unique symbols
       const allPositions = await asterdex.getPositions();
-      const positionsArray = Array.isArray(allPositions) ? allPositions : allPositions?.data || [];
+      const positionsArray = Array.isArray(allPositions)
+        ? allPositions
+        : allPositions?.data || [];
 
       // Extract unique symbols from positions
       const positionSymbols = positionsArray
@@ -165,7 +177,9 @@ export async function GET(request: Request) {
         requestedEndTime,
         1000
       );
-      const incomeArray = Array.isArray(allIncomeData) ? allIncomeData : allIncomeData?.data || [];
+      const incomeArray = Array.isArray(allIncomeData)
+        ? allIncomeData
+        : allIncomeData?.data || [];
       const incomeSymbols = incomeArray.map((inc: any) => inc.symbol);
 
       // Combine and deduplicate symbols
@@ -195,7 +209,10 @@ export async function GET(request: Request) {
       // Split the time range into 7-day chunks
       let currentStart = requestedStartTime;
       while (currentStart < requestedEndTime) {
-        const currentEnd = Math.min(currentStart + SEVEN_DAYS_MS, requestedEndTime);
+        const currentEnd = Math.min(
+          currentStart + SEVEN_DAYS_MS,
+          requestedEndTime
+        );
 
         try {
           // Get trade history for this chunk
@@ -205,7 +222,11 @@ export async function GET(request: Request) {
             currentEnd,
             1000
           );
-          allTrades.push(...(Array.isArray(chunkTrades) ? chunkTrades : chunkTrades?.data || []));
+          allTrades.push(
+            ...(Array.isArray(chunkTrades)
+              ? chunkTrades
+              : chunkTrades?.data || [])
+          );
 
           // Get income history for this chunk
           const chunkIncome = await asterdex.getIncomeHistory(
@@ -215,9 +236,16 @@ export async function GET(request: Request) {
             currentEnd,
             1000
           );
-          allIncome.push(...(Array.isArray(chunkIncome) ? chunkIncome : chunkIncome?.data || []));
+          allIncome.push(
+            ...(Array.isArray(chunkIncome)
+              ? chunkIncome
+              : chunkIncome?.data || [])
+          );
         } catch (error: any) {
-          console.error(`Error fetching chunk for ${symbolItem} ${currentStart}-${currentEnd}:`, error.message);
+          console.error(
+            `Error fetching chunk for ${symbolItem} ${currentStart}-${currentEnd}:`,
+            error.message
+          );
           // Continue with next chunk even if one fails
         }
 
@@ -227,7 +255,9 @@ export async function GET(request: Request) {
 
     // Get current positions for active trades
     const positionsResponse = await asterdex.getPositions(tradeSymbol);
-    positions = Array.isArray(positionsResponse) ? positionsResponse : positionsResponse?.data || [];
+    positions = Array.isArray(positionsResponse)
+      ? positionsResponse
+      : positionsResponse?.data || [];
 
     return NextResponse.json({
       accountId: account.id,

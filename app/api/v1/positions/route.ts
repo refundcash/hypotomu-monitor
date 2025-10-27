@@ -51,7 +51,11 @@ export async function GET(request: Request) {
     if (accountId) {
       if (startTime && endTime) {
         // Get historical data
-        const history = await getPositionsHistory(accountId, startTime, endTime);
+        const history = await getPositionsHistory(
+          accountId,
+          startTime,
+          endTime
+        );
         return NextResponse.json({
           accountId,
           type: "historical",
@@ -70,8 +74,8 @@ export async function GET(request: Request) {
     }
 
     // Get all accounts
-    const accounts = await fetchItems<Account[]>("mm_trading_accounts", {
-      filter: { status: { _eq: "published" } },
+    const accounts = await fetchItems<Account[]>("trading_accounts", {
+      filter: { status: { _eq: "active" } },
       limit: -1,
       fields: ["id", "name", "symbol", "exchange"],
     });

@@ -43,6 +43,7 @@ interface Account {
   accountId: string;
   accountName: string;
   symbol: string;
+  exchange?: string;
   currentPrice?: number;
   balance?: Balance;
   positions: Position[];
@@ -62,6 +63,11 @@ export default function HomePage() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(
+    new Set()
+  );
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -90,19 +96,19 @@ export default function HomePage() {
   useEffect(() => {
     if (status === "authenticated") {
       fetchData();
-      const interval = setInterval(fetchData, 60000);
+      const interval = setInterval(fetchData, 600000);
       return () => clearInterval(interval);
     }
   }, [status]);
 
-  const closePosition = async (accountId: string, percentage: number) => {
-    if (!confirm(`Close ${percentage}% of positions?`)) return;
+  const closePosition = async (accountId: string, symbol: string, percentage: number) => {
+    if (!confirm(`Close ${percentage}% of ${symbol} positions?`)) return;
 
     try {
       const response = await fetch("/api/close-position", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, percentage }),
+        body: JSON.stringify({ accountId, symbol, percentage }),
       });
 
       const result = await response.json();
@@ -143,6 +149,15 @@ export default function HomePage() {
     }
   };
 
+  // Helper function to get decimal places from a number
+  const getDecimalPlaces = (num: number): number => {
+    const str = num.toString();
+    if (str.includes('.')) {
+      return str.split('.')[1].length;
+    }
+    return 2; // Default to 2 decimal places
+  };
+
   const cancelAllOrders = async (accountId: string) => {
     if (!confirm("Cancel ALL orders?")) return;
 
@@ -165,12 +180,105 @@ export default function HomePage() {
     }
   };
 
+  const deleteGridLevel = async (
+    accountId: string,
+    symbol: string,
+    side: "buy" | "sell",
+    levelIndex: number
+  ) => {
+    try {
+      const response = await fetch("/api/delete-grid-level", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId, symbol, side, levelIndex }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        fetchData();
+      } else {
+        alert("Error: " + (result.error || "Unknown error"));
+      }
+    } catch (error: any) {
+      alert("Failed to delete grid level: " + error.message);
+    }
+  };
+
+  const clearAllGridLevels = async (
+    accountId: string,
+    symbol: string,
+    side?: "buy" | "sell"
+  ) => {
+    const sideText = side ? side.toUpperCase() : "ALL";
+    if (!confirm(`Clear ALL ${sideText} grid levels for ${symbol}?`)) return;
+
+    try {
+      const response = await fetch("/api/delete-grid-level", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId, symbol, side, clearAll: true }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        alert(result.message);
+        fetchData();
+      } else {
+        alert("Error: " + (result.error || "Unknown error"));
+      }
+    } catch (error: any) {
+      alert("Failed to clear grid levels: " + error.message);
+    }
+  };
+
+  // Get unique symbols from all accounts
+  const uniqueSymbols = Array.from(
+    new Set(data?.accounts.map((account) => account.symbol) || [])
+  ).sort();
+
+  // Toggle symbol selection
+  const toggleSymbol = (symbol: string) => {
+    const newSelected = new Set(selectedSymbols);
+    if (newSelected.has(symbol)) {
+      newSelected.delete(symbol);
+    } else {
+      newSelected.add(symbol);
+    }
+    setSelectedSymbols(newSelected);
+  };
+
+  // Clear all filters
+  const clearAllFilters = () => {
+    setSearchQuery("");
+    setSelectedSymbols(new Set());
+  };
+
+  // Filter accounts based on search query and selected symbols
+  const filteredAccounts =
+    data?.accounts.filter((account) => {
+      // Filter by selected symbols
+      if (selectedSymbols.size > 0 && !selectedSymbols.has(account.symbol)) {
+        return false;
+      }
+
+      // Filter by search query
+      if (!searchQuery.trim()) return true;
+
+      const query = searchQuery.toLowerCase();
+      const matchesName = account.accountName.toLowerCase().includes(query);
+      const matchesSymbol = account.symbol.toLowerCase().includes(query);
+      const matchesExchange = account.exchange?.toLowerCase().includes(query);
+
+      return matchesName || matchesSymbol || matchesExchange;
+    }) || [];
+
   if (status === "loading") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-lg">Loading...</div>
       </div>
     );
+    Hypotomu;
   }
 
   if (!session) {
@@ -180,23 +288,195 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-background p-4 lg:p-8">
       <div className="max-w-[1800px] mx-auto">
-        <div className="flex justify-between items-center mb-6 pb-4 border-b">
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold">
-              Grid Market Maker Monitor
-            </h1>
-            <div className="text-xs lg:text-sm text-muted-foreground mt-1">
-              {data
-                ? `Last updated: ${new Date(data.timestamp).toLocaleString()}`
-                : "Loading..."}
+        <div className="flex flex-col gap-4 mb-6 pb-4 border-b">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl lg:text-3xl font-bold">
+                Hypotomu Monitor
+              </h1>
+              <div className="text-xs lg:text-sm text-muted-foreground mt-1">
+                {data
+                  ? `Last updated: ${new Date(data.timestamp).toLocaleString()}`
+                  : "Loading..."}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button onClick={() => signOut()} variant="outline">
+                Sign Out
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <Button onClick={() => signOut()} variant="outline">
-              Sign Out
-            </Button>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search by symbol or account name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 pl-10 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <svg
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            <div className="relative">
+              <Button
+                variant="outline"
+                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                className="flex items-center gap-2"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                  />
+                </svg>
+                Symbols
+                {selectedSymbols.size > 0 && (
+                  <Badge variant="secondary" className="ml-1">
+                    {selectedSymbols.size}
+                  </Badge>
+                )}
+              </Button>
+
+              {isFilterOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsFilterOpen(false)}
+                  />
+                  <div className="absolute top-full mt-2 right-0 z-50 w-64 bg-background border border-border rounded-lg shadow-lg p-3 max-h-96 overflow-y-auto">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <span className="text-sm font-semibold">
+                        Filter by Symbol
+                      </span>
+                      {selectedSymbols.size > 0 && (
+                        <button
+                          onClick={() => setSelectedSymbols(new Set())}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {uniqueSymbols.map((symbol) => {
+                        const count =
+                          data?.accounts.filter((acc) => acc.symbol === symbol)
+                            .length || 0;
+                        return (
+                          <label
+                            key={symbol}
+                            className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 p-2 rounded"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedSymbols.has(symbol)}
+                              onChange={() => toggleSymbol(symbol)}
+                              className="h-4 w-4 rounded border-input"
+                            />
+                            <span className="flex-1 text-sm">{symbol}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {count}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {(searchQuery || selectedSymbols.size > 0) && (
+              <div className="flex items-center gap-2">
+                <div className="text-sm text-muted-foreground">
+                  {filteredAccounts.length} result
+                  {filteredAccounts.length !== 1 ? "s" : ""}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearAllFilters}
+                  className="text-xs h-8"
+                >
+                  Clear all
+                </Button>
+              </div>
+            )}
           </div>
+
+          {selectedSymbols.size > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {Array.from(selectedSymbols).map((symbol) => (
+                <Badge
+                  key={symbol}
+                  variant="secondary"
+                  className="flex items-center gap-1 pr-1"
+                >
+                  {symbol}
+                  <button
+                    onClick={() => toggleSymbol(symbol)}
+                    className="ml-1 hover:bg-muted rounded-full p-0.5"
+                  >
+                    <svg
+                      className="h-3 w-3"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
 
         {error && (
@@ -212,17 +492,38 @@ export default function HomePage() {
               <SkeletonCard />
               <SkeletonCard />
             </>
+          ) : filteredAccounts.length === 0 ? (
+            <div className="col-span-full text-center py-16">
+              <div className="text-muted-foreground text-lg mb-2">
+                {searchQuery ? "No results found" : "No accounts available"}
+              </div>
+              {searchQuery && (
+                <div className="text-sm text-muted-foreground">
+                  Try adjusting your search query
+                </div>
+              )}
+            </div>
           ) : (
-            data?.accounts.map((account) => (
-              <Card key={account.accountId} className="overflow-hidden">
+            filteredAccounts.map((account) => (
+              <Card
+                key={`${account.accountId}-${account.symbol}`}
+                className="overflow-hidden"
+              >
                 <CardHeader className="pb-4">
                   <div className="flex justify-between items-start gap-4">
                     <div className="flex-1 min-w-0">
                       <CardTitle className="text-lg lg:text-xl truncate">
                         {account.accountName}
                       </CardTitle>
-                      <div className="text-xs lg:text-sm text-muted-foreground mt-1">
-                        {account.symbol}
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="text-sm lg:text-base font-semibold text-foreground">
+                          {account.symbol}
+                        </div>
+                        {account.exchange && (
+                          <Badge variant="secondary" className="text-xs">
+                            {account.exchange}
+                          </Badge>
+                        )}
                       </div>
                     </div>
                     <Badge variant="outline" className="text-xs shrink-0">
@@ -311,7 +612,7 @@ export default function HomePage() {
                                 <Button
                                   key={pct}
                                   onClick={() =>
-                                    closePosition(account.accountId, pct)
+                                    closePosition(account.accountId, account.symbol, pct)
                                   }
                                   size="sm"
                                   className={`text-xs h-8 px-3 ${
@@ -412,7 +713,7 @@ export default function HomePage() {
                       <div>
                         <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
                           <div className="text-sm font-semibold text-muted-foreground">
-                            Limit Orders{" "}
+                            Grid Levels{" "}
                             {account.buyOrders.length +
                               account.sellOrders.length >
                               0 &&
@@ -424,12 +725,17 @@ export default function HomePage() {
                           {(account.buyOrders.length > 0 ||
                             account.sellOrders.length > 0) && (
                             <Button
-                              onClick={() => cancelAllOrders(account.accountId)}
+                              onClick={() =>
+                                clearAllGridLevels(
+                                  account.accountId,
+                                  account.symbol
+                                )
+                              }
                               size="sm"
                               variant="destructive"
                               className="text-xs h-8"
                             >
-                              Cancel All
+                              Clear All
                             </Button>
                           )}
                         </div>
@@ -438,7 +744,7 @@ export default function HomePage() {
                           {account.buyOrders.length === 0 &&
                           account.sellOrders.length === 0 ? (
                             <div className="text-muted-foreground text-center py-8 text-sm italic">
-                              No pending orders
+                              No pending grid levels
                             </div>
                           ) : (
                             <div className="space-y-2">
@@ -458,100 +764,116 @@ export default function HomePage() {
                                 <span className="w-8"></span>
                               </div>
                               <div className="space-y-1.5">
-                                {account.sellOrders.map((order) => {
-                                  const distance = account.currentPrice
-                                    ? ((order.price - account.currentPrice) /
-                                        account.currentPrice) *
-                                      100
-                                    : 0;
-                                  return (
-                                    <div
-                                      key={order.orderId}
-                                      className="flex items-center gap-1.5 py-2.5 px-2 rounded bg-red-50 dark:bg-red-950/20 border-l-[3px] border-red-500 group hover:bg-red-100 dark:hover:bg-red-950/30 transition-colors"
-                                    >
-                                      <span className="text-red-600 dark:text-red-400 font-mono font-semibold text-sm flex-[1.3] min-w-0 truncate">
-                                        ${order.price.toFixed(2)}
-                                      </span>
-                                      <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
-                                        {order.size.toFixed(2)}
-                                      </span>
-                                      <span className="font-medium text-sm flex-1 min-w-0 text-center">
-                                        ${order.value.toFixed(0)}
-                                      </span>
-                                      <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
-                                        {distance >= 0 ? "+" : ""}
-                                        {distance.toFixed(2)}%
-                                      </span>
-                                      <Button
-                                        onClick={() =>
-                                          cancelOrder(
-                                            account.accountId,
-                                            order.orderId,
-                                            order.instId
-                                          )
-                                        }
-                                        size="sm"
-                                        variant="ghost"
-                                        className="opacity-0 group-hover:opacity-100 text-xs h-6 px-2 hover:bg-destructive hover:text-destructive-foreground w-8 shrink-0"
+                                {account.sellOrders
+                                  .map((order) => ({
+                                    ...order,
+                                    distance: account.currentPrice
+                                      ? ((order.price - account.currentPrice) /
+                                          account.currentPrice) *
+                                        100
+                                      : 0,
+                                  }))
+                                  .sort((a, b) => b.price - a.price)
+                                  .map((order, idx) => {
+                                    const levelIndex = parseInt(order.orderId.split('_')[2] || '0');
+                                    const decimals = account.currentPrice ? getDecimalPlaces(account.currentPrice) : 2;
+                                    return (
+                                      <div
+                                        key={order.orderId}
+                                        className="flex items-center gap-1.5 py-2.5 px-2 rounded bg-red-50 dark:bg-red-950/20 border-l-[3px] border-red-500 group hover:bg-red-100 dark:hover:bg-red-950/30 transition-colors"
                                       >
-                                        ✕
-                                      </Button>
-                                    </div>
-                                  );
-                                })}
+                                        <span className="text-red-600 dark:text-red-400 font-mono font-semibold text-sm flex-[1.3] min-w-0 truncate">
+                                          ${(order.price || 0).toFixed(decimals)}
+                                        </span>
+                                        <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
+                                          {(order.size || 0).toFixed(2)}
+                                        </span>
+                                        <span className="font-medium text-sm flex-1 min-w-0 text-center">
+                                          ${(order.value || 0).toFixed(2)}
+                                        </span>
+                                        <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
+                                          {order.distance >= 0 ? "+" : ""}
+                                          {order.distance.toFixed(2)}%
+                                        </span>
+                                        <Button
+                                          onClick={() =>
+                                            deleteGridLevel(
+                                              account.accountId,
+                                              account.symbol,
+                                              "sell",
+                                              levelIndex
+                                            )
+                                          }
+                                          size="sm"
+                                          variant="ghost"
+                                          className="opacity-0 group-hover:opacity-100 text-xs h-6 px-2 hover:bg-destructive hover:text-destructive-foreground w-8 shrink-0"
+                                        >
+                                          ✕
+                                        </Button>
+                                      </div>
+                                    );
+                                  })}
 
                                 {account.currentPrice && (
                                   <div className="relative my-3">
                                     <div className="border-t-2 border-dashed border-blue-500/50" />
                                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-background px-3 py-1">
                                       <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
-                                        ${account.currentPrice.toFixed(2)}
+                                        ${account.currentPrice.toFixed(getDecimalPlaces(account.currentPrice))}
                                       </span>
                                     </div>
                                   </div>
                                 )}
 
-                                {account.buyOrders.map((order) => {
-                                  const distance = account.currentPrice
-                                    ? ((order.price - account.currentPrice) /
-                                        account.currentPrice) *
-                                      100
-                                    : 0;
-                                  return (
-                                    <div
-                                      key={order.orderId}
-                                      className="flex items-center gap-1.5 py-2.5 px-2 rounded bg-green-50 dark:bg-green-950/20 border-l-[3px] border-green-500 group hover:bg-green-100 dark:hover:bg-green-950/30 transition-colors"
-                                    >
-                                      <span className="text-green-600 dark:text-green-400 font-mono font-semibold text-sm flex-[1.3] min-w-0 truncate">
-                                        ${order.price.toFixed(2)}
-                                      </span>
-                                      <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
-                                        {order.size.toFixed(2)}
-                                      </span>
-                                      <span className="font-medium text-sm flex-1 min-w-0 text-center">
-                                        ${order.value.toFixed(0)}
-                                      </span>
-                                      <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
-                                        {distance >= 0 ? "+" : ""}
-                                        {distance.toFixed(2)}%
-                                      </span>
-                                      <Button
-                                        onClick={() =>
-                                          cancelOrder(
-                                            account.accountId,
-                                            order.orderId,
-                                            order.instId
-                                          )
-                                        }
-                                        size="sm"
-                                        variant="ghost"
-                                        className="opacity-0 group-hover:opacity-100 text-xs h-6 px-2 hover:bg-destructive hover:text-destructive-foreground w-8 shrink-0"
+                                {account.buyOrders
+                                  .map((order) => ({
+                                    ...order,
+                                    distance: account.currentPrice
+                                      ? ((order.price - account.currentPrice) /
+                                          account.currentPrice) *
+                                        100
+                                      : 0,
+                                  }))
+                                  .sort((a, b) => b.price - a.price)
+                                  .map((order, idx) => {
+                                    const levelIndex = parseInt(order.orderId.split('_')[2] || '0');
+                                    const decimals = account.currentPrice ? getDecimalPlaces(account.currentPrice) : 2;
+                                    return (
+                                      <div
+                                        key={order.orderId}
+                                        className="flex items-center gap-1.5 py-2.5 px-2 rounded bg-green-50 dark:bg-green-950/20 border-l-[3px] border-green-500 group hover:bg-green-100 dark:hover:bg-green-950/30 transition-colors"
                                       >
-                                        ✕
-                                      </Button>
-                                    </div>
-                                  );
-                                })}
+                                        <span className="text-green-600 dark:text-green-400 font-mono font-semibold text-sm flex-[1.3] min-w-0 truncate">
+                                          ${(order.price || 0).toFixed(decimals)}
+                                        </span>
+                                        <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
+                                          {(order.size || 0).toFixed(2)}
+                                        </span>
+                                        <span className="font-medium text-sm flex-1 min-w-0 text-center">
+                                          ${(order.value || 0).toFixed(2)}
+                                        </span>
+                                        <span className="text-muted-foreground text-xs flex-1 min-w-0 text-center">
+                                          {order.distance >= 0 ? "+" : ""}
+                                          {order.distance.toFixed(2)}%
+                                        </span>
+                                        <Button
+                                          onClick={() =>
+                                            deleteGridLevel(
+                                              account.accountId,
+                                              account.symbol,
+                                              "buy",
+                                              levelIndex
+                                            )
+                                          }
+                                          size="sm"
+                                          variant="ghost"
+                                          className="opacity-0 group-hover:opacity-100 text-xs h-6 px-2 hover:bg-destructive hover:text-destructive-foreground w-8 shrink-0"
+                                        >
+                                          ✕
+                                        </Button>
+                                      </div>
+                                    );
+                                  })}
                               </div>
                             </div>
                           )}

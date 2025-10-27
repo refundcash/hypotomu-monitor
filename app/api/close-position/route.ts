@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { fetchItems } from "@/lib/directus";
 import { OKXClient } from "@/lib/okx";
+import { AsterdexClient } from "@/lib/asterdex";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,11 +13,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { accountId, percentage } = await request.json();
+    const { accountId, percentage, symbol } = await request.json();
 
     if (!accountId || !percentage) {
       return NextResponse.json(
         { error: "Missing accountId or percentage" },
+        { status: 400 }
+      );
+    }
+
+    if (!symbol) {
+      return NextResponse.json(
+        { error: "Missing symbol" },
         { status: 400 }
       );
     }
@@ -28,7 +36,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const accounts = await fetchItems("mm_trading_accounts", {
+    const accounts = await fetchItems("trading_accounts", {
       filter: { id: { _eq: accountId } },
       fields: ["*"],
     });
@@ -50,11 +58,85 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const exchange = account.exchange || "okx";
+
+    if (exchange === "asterdex") {
+      const asterdex = new AsterdexClient(apiKey, apiSecret, true);
+
+      const positionsResponse = await asterdex.getPositions(symbol);
+      const positions = Array.isArray(positionsResponse)
+        ? positionsResponse
+        : positionsResponse?.data || [];
+      const activePositions = positions.filter(
+        (pos: any) => (pos.symbol || pos.s) === symbol && Math.abs(Number(pos.positionAmt || pos.pa || 0)) > 0
+      );
+
+      if (activePositions.length === 0) {
+        return NextResponse.json({
+          success: true,
+          message: "No positions to close",
+          results: [],
+        });
+      }
+
+      const results = [];
+      for (const position of activePositions) {
+        try {
+          const posSize = Number(position.positionAmt || position.pa || 0);
+          const absSize = Math.abs(posSize);
+          const closeSize = (absSize * percentage) / 100;
+
+          const closeSide = posSize > 0 ? "SELL" : "BUY";
+
+          const orderData = {
+            symbol: symbol,
+            side: closeSide,
+            type: "MARKET",
+            quantity: closeSize.toFixed(2),
+          };
+
+          console.log(`[Asterdex] Placing close order:`, orderData);
+          const response = await asterdex.placeOrder(orderData);
+          console.log(`[Asterdex] Close order response:`, JSON.stringify(response));
+
+          // Check if order was successful
+          const isSuccess = response.orderId || response.clientOrderId || response.i;
+
+          results.push({
+            symbol: symbol,
+            success: !!isSuccess,
+            orderId: response.orderId || response.clientOrderId || response.i,
+            closeSize,
+            percentage,
+            error: !isSuccess ? (response.msg || response.message || "Unknown error") : undefined,
+          });
+        } catch (error: any) {
+          console.error(`[Asterdex] Error closing position:`, error);
+          console.error(`[Asterdex] Error details:`, {
+            message: error.message,
+            response: error.response?.data,
+            status: error.response?.status,
+          });
+
+          results.push({
+            symbol: symbol,
+            success: false,
+            error: error.response?.data?.msg || error.response?.data?.message || error.message,
+            closeSize: 0,
+            percentage,
+          });
+        }
+      }
+
+      return NextResponse.json({ success: true, results });
+    }
+
     const okx = new OKXClient(apiKey, apiSecret, passphrase);
 
     const positionsResponse = await okx.getPositions("SWAP");
     const positions = positionsResponse.data.filter(
-      (pos: any) => pos.instId === account.symbol && Math.abs(Number(pos.pos)) > 0
+      (pos: any) =>
+        pos.instId === symbol && Math.abs(Number(pos.pos)) > 0
     );
 
     if (positions.length === 0) {
@@ -65,7 +147,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const instrumentResponse = await okx.getInstrumentInfo(account.symbol);
+    const instrumentResponse = await okx.getInstrumentInfo(symbol);
     const lotSz =
       instrumentResponse.code === "0" && instrumentResponse.data.length > 0
         ? parseFloat(instrumentResponse.data[0].lotSz)

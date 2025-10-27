@@ -123,10 +123,14 @@ export async function storePositionsSnapshot(
 
   // Also store the latest snapshot with a fixed key
   const latestKey = `positions:${accountId}:latest`;
-  await client.setex(latestKey, 30 * 24 * 60 * 60, JSON.stringify({
-    timestamp,
-    data: positions,
-  }));
+  await client.setex(
+    latestKey,
+    30 * 24 * 60 * 60,
+    JSON.stringify({
+      timestamp,
+      data: positions,
+    })
+  );
 }
 
 /**
@@ -146,10 +150,14 @@ export async function storeOrdersSnapshot(
 
   // Also store the latest snapshot with a fixed key
   const latestKey = `orders:${accountId}:latest`;
-  await client.setex(latestKey, 30 * 24 * 60 * 60, JSON.stringify({
-    timestamp,
-    data: orders,
-  }));
+  await client.setex(
+    latestKey,
+    30 * 24 * 60 * 60,
+    JSON.stringify({
+      timestamp,
+      data: orders,
+    })
+  );
 }
 
 /**
@@ -190,7 +198,7 @@ export async function getPositionsHistory(
 
   const results = [];
   for (const key of keys) {
-    if (key.endsWith(':latest')) continue; // Skip the latest key
+    if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
     const timestamp = parseInt(parts[2]);
@@ -223,7 +231,7 @@ export async function getOrdersHistory(
 
   const results = [];
   for (const key of keys) {
-    if (key.endsWith(':latest')) continue; // Skip the latest key
+    if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
     const timestamp = parseInt(parts[2]);
@@ -259,10 +267,13 @@ export async function storeTradeHistorySnapshot(
 
   // Also store the latest snapshot with a fixed key (no TTL)
   const latestKey = `trades:${accountId}:latest`;
-  await client.set(latestKey, JSON.stringify({
-    timestamp,
-    data: tradeHistory,
-  }));
+  await client.set(
+    latestKey,
+    JSON.stringify({
+      timestamp,
+      data: tradeHistory,
+    })
+  );
 }
 
 /**
@@ -291,7 +302,7 @@ export async function getTradeHistoryRange(
 
   const results = [];
   for (const key of keys) {
-    if (key.endsWith(':latest')) continue; // Skip the latest key
+    if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
     const timestamp = parseInt(parts[2]);
@@ -308,4 +319,122 @@ export async function getTradeHistoryRange(
   }
 
   return results.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * Grid Level Interface
+ */
+export interface GridLevel {
+  price: number;
+  size: number;
+  status: "pending" | "filled";
+}
+
+/**
+ * Get grid levels for an account and symbol
+ * Key format: astergrid:{accountId}:{symbol}:{SIDE} (uppercase)
+ * Data is stored as a Redis Hash
+ */
+export async function getGridLevels(
+  accountId: string,
+  symbol: string,
+  side: "buy" | "sell"
+): Promise<GridLevel[]> {
+  const client = getRedisClient();
+  // Match the actual Redis structure: astergrid:{accountId}:{symbol}:{SIDE}
+  const sideUpper = side.toUpperCase();
+  const key = `astergrid:${accountId}:${symbol}:${sideUpper}`;
+
+  try {
+    const data = await client.hgetall(key);
+
+    if (!data || Object.keys(data).length === 0) {
+      return [];
+    }
+
+    // Convert hash to array of grid levels, sorted by level number
+    const levels: GridLevel[] = [];
+    const levelKeys = Object.keys(data).sort((a, b) => {
+      const numA = parseInt(a.split("_")[1]);
+      const numB = parseInt(b.split("_")[1]);
+      return numA - numB;
+    });
+
+    for (const levelKey of levelKeys) {
+      try {
+        const levelData = JSON.parse(data[levelKey]);
+        levels.push(levelData);
+      } catch (e) {
+        console.error(`Error parsing grid level ${levelKey}:`, e);
+        console.error(`Raw data for ${levelKey}:`, data[levelKey]);
+      }
+    }
+
+    return levels;
+  } catch (error) {
+    console.error(
+      `Error getting grid levels for ${accountId}:${symbol}:${side}:`,
+      error
+    );
+    return [];
+  }
+}
+
+/**
+ * Set a grid level for an account and symbol
+ * Key format: astergrid:{accountId}:{symbol}:{SIDE} (uppercase)
+ * Field: level_{index}
+ */
+export async function setGridLevel(
+  accountId: string,
+  symbol: string,
+  side: "buy" | "sell",
+  levelIndex: number,
+  level: GridLevel
+): Promise<void> {
+  const client = getRedisClient();
+  const sideUpper = side.toUpperCase();
+  const key = `astergrid:${accountId}:${symbol}:${sideUpper}`;
+  const field = `level_${levelIndex}`;
+
+  await client.hset(key, field, JSON.stringify(level));
+}
+
+/**
+ * Clear all grid levels for an account and symbol
+ */
+export async function clearGridLevels(
+  accountId: string,
+  symbol: string,
+  side?: "buy" | "sell"
+): Promise<void> {
+  const client = getRedisClient();
+
+  if (side) {
+    const sideUpper = side.toUpperCase();
+    const key = `astergrid:${accountId}:${symbol}:${sideUpper}`;
+    await client.del(key);
+  } else {
+    // Clear both buy and sell
+    await client.del(`astergrid:${accountId}:${symbol}:BUY`);
+    await client.del(`astergrid:${accountId}:${symbol}:SELL`);
+  }
+}
+
+/**
+ * Delete a specific grid level by index
+ */
+export async function deleteGridLevel(
+  accountId: string,
+  symbol: string,
+  side: "buy" | "sell",
+  levelIndex: number
+): Promise<void> {
+  const client = getRedisClient();
+  const sideUpper = side.toUpperCase();
+  const key = `astergrid:${accountId}:${symbol}:${sideUpper}`;
+  const field = `level_${levelIndex}`;
+
+  await client.hdel(key, field);
+  console.log(`[Redis] Deleted grid level ${field} from ${key}`);
 }

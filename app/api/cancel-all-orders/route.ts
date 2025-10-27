@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing accountId" }, { status: 400 });
     }
 
-    const accounts = await fetchItems("mm_trading_accounts", {
+    const accounts = await fetchItems("trading_accounts", {
       filter: { id: { _eq: accountId } },
       fields: ["*"],
     });

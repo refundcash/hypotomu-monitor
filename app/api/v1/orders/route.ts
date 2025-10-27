@@ -70,8 +70,8 @@ export async function GET(request: Request) {
     }
 
     // Get all accounts
-    const accounts = await fetchItems<Account[]>("mm_trading_accounts", {
-      filter: { status: { _eq: "published" } },
+    const accounts = await fetchItems<Account[]>("trading_accounts", {
+      filter: { status: { _eq: "active" } },
       limit: -1,
       fields: ["id", "name", "symbol", "exchange"],
     });

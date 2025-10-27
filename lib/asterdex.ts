@@ -11,6 +11,8 @@ interface OrderData {
   quantity?: string;
   price?: string;
   timeInForce?: string;
+  reduceOnly?: string;
+  positionSide?: string;
 }
 
 interface AsterdexAuthParams {
@@ -107,11 +109,18 @@ export class AsterdexClient {
       .map((key) => `${key}=${params[key]}`)
       .join("&");
     const signature = this.generateSignature(queryString);
-    params.signature = signature;
+
+    // Build the final query string with signature
+    const finalQueryString = `${queryString}&signature=${signature}`;
 
     const path = "/fapi/v1/order"; // Legacy API endpoint
-    const headers = this.getHeaders();
-    const response = await this.axios.post(path, params, { headers });
+    const headers = {
+      ...this.getHeaders(),
+      "Content-Type": "application/x-www-form-urlencoded",
+    };
+
+    // Send as query string in the URL for POST request
+    const response = await this.axios.post(`${path}?${finalQueryString}`, null, { headers });
     return response.data;
   }
 
