@@ -25,6 +25,7 @@ export class AsterdexClient {
   private apiSecret: string;
   private baseURL: string;
   public axios: AxiosInstance;
+  private recvWindow: number = 20000; // 20 seconds to handle parallel requests
 
   constructor(apiKey: string, apiSecret: string, isFutures: boolean = true) {
     this.apiKey = apiKey;
@@ -49,21 +50,59 @@ export class AsterdexClient {
     };
   }
 
-  async getAccountBalance() {
-    const timestamp = Date.now();
-    const queryString = `timestamp=${timestamp}`;
-    const signature = this.generateSignature(queryString);
-    const finalQueryString = `${queryString}&signature=${signature}`;
+  /**
+   * Retry helper for handling timestamp errors (-1021)
+   * Retries the request up to maxRetries times if timestamp is outside recvWindow
+   */
+  private async retryOnTimestampError<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 2
+  ): Promise<T> {
+    let lastError: any;
 
-    const path = "/fapi/v2/balance"; // Legacy API endpoint
-    const headers = this.getHeaders();
-    const response = await this.axios.get(`${path}?${finalQueryString}`, { headers });
-    return response.data;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        lastError = error;
+
+        // Check if it's a timestamp error (-1021)
+        const isTimestampError =
+          error.response?.data?.code === -1021 ||
+          error.response?.data?.msg?.includes("Timestamp") ||
+          error.response?.data?.msg?.includes("recvWindow");
+
+        if (isTimestampError && attempt < maxRetries) {
+          console.log(`[Asterdex] Timestamp error, retrying (attempt ${attempt + 1}/${maxRetries})...`);
+          // Wait a bit before retrying
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw lastError;
+  }
+
+  async getAccountBalance() {
+    return this.retryOnTimestampError(async () => {
+      const timestamp = Date.now();
+      const queryString = `recvWindow=${this.recvWindow}&timestamp=${timestamp}`;
+      const signature = this.generateSignature(queryString);
+      const finalQueryString = `${queryString}&signature=${signature}`;
+
+      const path = "/fapi/v2/balance"; // Legacy API endpoint
+      const headers = this.getHeaders();
+      const response = await this.axios.get(`${path}?${finalQueryString}`, { headers });
+      return response.data;
+    });
   }
 
   async getAccount() {
     const timestamp = Date.now();
-    const queryString = `timestamp=${timestamp}`;
+    const queryString = `recvWindow=${this.recvWindow}&timestamp=${timestamp}`;
     const signature = this.generateSignature(queryString);
     const finalQueryString = `${queryString}&signature=${signature}`;
 
@@ -74,54 +113,59 @@ export class AsterdexClient {
   }
 
   async getPositions(symbol?: string) {
-    const timestamp = Date.now();
-    const params: any = { timestamp };
-    if (symbol) {
-      params.symbol = symbol;
-    }
+    return this.retryOnTimestampError(async () => {
+      const timestamp = Date.now();
+      const params: any = { recvWindow: this.recvWindow, timestamp };
+      if (symbol) {
+        params.symbol = symbol;
+      }
 
-    // Build query string in alphabetical order for signature
-    const queryString = Object.keys(params)
-      .sort()
-      .map((key) => `${key}=${params[key]}`)
-      .join("&");
+      // Build query string in alphabetical order for signature
+      const queryString = Object.keys(params)
+        .sort()
+        .map((key) => `${key}=${params[key]}`)
+        .join("&");
 
-    const signature = this.generateSignature(queryString);
+      const signature = this.generateSignature(queryString);
 
-    // Build final query string with signature
-    const finalQueryString = queryString + `&signature=${signature}`;
+      // Build final query string with signature
+      const finalQueryString = queryString + `&signature=${signature}`;
 
-    const path = "/fapi/v2/positionRisk"; // Legacy API endpoint
-    const headers = this.getHeaders();
-    const response = await this.axios.get(`${path}?${finalQueryString}`, { headers });
-    return response.data;
+      const path = "/fapi/v2/positionRisk"; // Legacy API endpoint
+      const headers = this.getHeaders();
+      const response = await this.axios.get(`${path}?${finalQueryString}`, { headers });
+      return response.data;
+    });
   }
 
   async placeOrder(orderData: OrderData) {
-    const timestamp = Date.now();
-    const params: any = {
-      ...orderData,
-      timestamp,
-    };
+    return this.retryOnTimestampError(async () => {
+      const timestamp = Date.now();
+      const params: any = {
+        ...orderData,
+        recvWindow: this.recvWindow,
+        timestamp,
+      };
 
-    const queryString = Object.keys(params)
-      .sort()
-      .map((key) => `${key}=${params[key]}`)
-      .join("&");
-    const signature = this.generateSignature(queryString);
+      const queryString = Object.keys(params)
+        .sort()
+        .map((key) => `${key}=${params[key]}`)
+        .join("&");
+      const signature = this.generateSignature(queryString);
 
-    // Build the final query string with signature
-    const finalQueryString = `${queryString}&signature=${signature}`;
+      // Build the final query string with signature
+      const finalQueryString = `${queryString}&signature=${signature}`;
 
-    const path = "/fapi/v1/order"; // Legacy API endpoint
-    const headers = {
-      ...this.getHeaders(),
-      "Content-Type": "application/x-www-form-urlencoded",
-    };
+      const path = "/fapi/v1/order"; // Legacy API endpoint
+      const headers = {
+        ...this.getHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      };
 
-    // Send as query string in the URL for POST request
-    const response = await this.axios.post(`${path}?${finalQueryString}`, null, { headers });
-    return response.data;
+      // Send as query string in the URL for POST request
+      const response = await this.axios.post(`${path}?${finalQueryString}`, null, { headers });
+      return response.data;
+    });
   }
 
   async cancelOrder(symbol: string, orderId: string) {
@@ -129,6 +173,7 @@ export class AsterdexClient {
     const params: any = {
       symbol,
       orderId,
+      recvWindow: this.recvWindow,
       timestamp,
     };
 
@@ -148,7 +193,7 @@ export class AsterdexClient {
 
   async getPendingOrders(symbol?: string) {
     const timestamp = Date.now();
-    const params: any = { timestamp };
+    const params: any = { recvWindow: this.recvWindow, timestamp };
     if (symbol) {
       params.symbol = symbol;
     }
@@ -191,7 +236,7 @@ export class AsterdexClient {
   async getUserTrades(symbol: string, startTime?: number, endTime?: number, limit: number = 500) {
     try {
       const timestamp = Date.now();
-      const params: any = { symbol, timestamp, limit };
+      const params: any = { symbol, recvWindow: this.recvWindow, timestamp, limit };
       if (startTime) {
         params.startTime = startTime;
       }
@@ -229,7 +274,7 @@ export class AsterdexClient {
 
   async getIncomeHistory(symbol?: string, incomeType?: string, startTime?: number, endTime?: number, limit: number = 100) {
     const timestamp = Date.now();
-    const params: any = { timestamp, limit };
+    const params: any = { recvWindow: this.recvWindow, timestamp, limit };
     if (symbol) {
       params.symbol = symbol;
     }

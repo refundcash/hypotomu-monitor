@@ -8,6 +8,7 @@ import {
   storeEquitySnapshot,
   getEquity24hAgo,
   getGridLevels,
+  getGridLevelsBothSides,
 } from "@/lib/redis";
 
 interface Account {
@@ -174,114 +175,119 @@ async function processAsterdexAccount(
       return [];
     }
 
-    // Create a card for each symbol
-    const results = [];
-    for (const [symbol, symbolPositions] of positionsBySymbol) {
-      try {
-        // Get ticker price for this symbol
-        const tickerResponse = await asterdex.getTicker(symbol);
-        const currentPrice = tickerResponse?.lastPrice
-          ? Number(tickerResponse.lastPrice)
-          : tickerResponse?.bidPrice && tickerResponse?.askPrice
-          ? (Number(tickerResponse.bidPrice) +
-              Number(tickerResponse.askPrice)) /
-            2
-          : null;
+    // Create a card for each symbol - process all symbols in parallel
+    const symbolPromises = Array.from(positionsBySymbol.entries()).map(
+      async ([symbol, symbolPositions]) => {
+        try {
+          // Fetch all data for this symbol in parallel
+          const [tickerResponse, exchangeInfo, { buy: buyGridLevels, sell: sellGridLevels }] =
+            await Promise.all([
+              asterdex.getTicker(symbol),
+              asterdex.getExchangeInfo(symbol),
+              getGridLevelsBothSides(account.id, symbol),
+            ]);
 
-        // Get exchange info to get contract size/multiplier
-        const exchangeInfo = await asterdex.getExchangeInfo(symbol);
+          const currentPrice = tickerResponse?.lastPrice
+            ? Number(tickerResponse.lastPrice)
+            : tickerResponse?.bidPrice && tickerResponse?.askPrice
+            ? (Number(tickerResponse.bidPrice) +
+                Number(tickerResponse.askPrice)) /
+              2
+            : null;
 
-        // Extract contract size from exchange info
-        let contractSize = 1; // Default to 1 if not found
-        if (exchangeInfo?.symbols && Array.isArray(exchangeInfo.symbols)) {
-          const symbolInfo = exchangeInfo.symbols.find(
-            (s: any) => s.symbol === symbol
-          );
-          if (symbolInfo) {
-            contractSize = Number(symbolInfo.contractSize || 1);
+          // Extract contract size from exchange info
+          let contractSize = 1; // Default to 1 if not found
+          if (exchangeInfo?.symbols && Array.isArray(exchangeInfo.symbols)) {
+            const symbolInfo = exchangeInfo.symbols.find(
+              (s: any) => s.symbol === symbol
+            );
+            if (symbolInfo) {
+              contractSize = Number(symbolInfo.contractSize || 1);
+            }
           }
+
+          // Filter to only pending grid levels and convert to order format
+          const buyOrders = buyGridLevels
+            .filter((level) => level.status === "pending")
+            .map((level, idx) => {
+              const sizeContracts = (level as any).sizeContracts || 0;
+              const sizeUSD = (level as any).sizeUSD || 0;
+              const price = level.price || 0;
+              return {
+                price: price,
+                size: sizeContracts,
+                value: sizeUSD,
+                orderId: `grid_buy_${idx}`,
+                instId: symbol,
+              };
+            })
+            .sort((a, b) => b.price - a.price); // Highest price first
+
+          const sellOrders = sellGridLevels
+            .filter((level) => level.status === "pending")
+            .map((level, idx) => {
+              const sizeContracts = (level as any).sizeContracts || 0;
+              const sizeUSD = (level as any).sizeUSD || 0;
+              const price = level.price || 0;
+              return {
+                price: price,
+                size: sizeContracts,
+                value: sizeUSD,
+                orderId: `grid_sell_${idx}`,
+                instId: symbol,
+              };
+            })
+            .sort((a, b) => a.price - b.price); // Lowest price first
+
+          return {
+            accountId: account.id,
+            accountName: account.name || account.id,
+            symbol: symbol,
+            exchange: "asterdex",
+            currentPrice: currentPrice,
+            balance: {
+              equity: totalEquity,
+              availableBalance: availableBalance,
+              balanceInUse: balanceInUse,
+              unrealizedPnL: unrealizedPnL,
+              equity24hAgo: equity24hAgo,
+              equity24hChange: equity24hChange,
+              equity24hChangePercent: equity24hChangePercent,
+            },
+            positions: symbolPositions.map((pos: any) => {
+              const posAmt = Number(pos.positionAmt || pos.pa || 0);
+              return {
+                side: posAmt > 0 ? "LONG" : "SHORT",
+                contracts: Math.abs(posAmt),
+                avgPrice: Number(pos.entryPrice || pos.ep || 0),
+                unrealizedPnL: Number(
+                  pos.unRealizedProfit || pos.unrealizedProfit || pos.upl || 0
+                ),
+                unrealizedPnLRatio:
+                  Number(pos.unRealizedProfitRatio || pos.uplRatio || 0) * 100,
+                leverage: Number(pos.leverage || pos.lever || 1),
+                notionalUsd: Math.abs(
+                  Number(pos.notional || pos.notionalUsd || 0)
+                ),
+                instId: symbol,
+              };
+            }),
+            buyOrders: buyOrders,
+            sellOrders: sellOrders,
+          };
+        } catch (symbolError: any) {
+          console.error(`Error processing symbol ${symbol}:`, symbolError);
+          // Return null for failed symbols
+          return null;
         }
-
-        // Get grid levels from Redis for this symbol
-        const buyGridLevels = await getGridLevels(account.id, symbol, "buy");
-        const sellGridLevels = await getGridLevels(account.id, symbol, "sell");
-
-        // Filter to only pending grid levels and convert to order format
-        const buyOrders = buyGridLevels
-          .filter((level) => level.status === "pending")
-          .map((level, idx) => {
-            const sizeContracts = (level as any).sizeContracts || 0;
-            const sizeUSD = (level as any).sizeUSD || 0;
-            const price = level.price || 0;
-            return {
-              price: price,
-              size: sizeContracts,
-              value: sizeUSD,
-              orderId: `grid_buy_${idx}`,
-              instId: symbol,
-            };
-          })
-          .sort((a, b) => b.price - a.price); // Highest price first
-
-        const sellOrders = sellGridLevels
-          .filter((level) => level.status === "pending")
-          .map((level, idx) => {
-            const sizeContracts = (level as any).sizeContracts || 0;
-            const sizeUSD = (level as any).sizeUSD || 0;
-            const price = level.price || 0;
-            return {
-              price: price,
-              size: sizeContracts,
-              value: sizeUSD,
-              orderId: `grid_sell_${idx}`,
-              instId: symbol,
-            };
-          })
-          .sort((a, b) => a.price - b.price); // Lowest price first
-
-        results.push({
-          accountId: account.id,
-          accountName: account.name || account.id,
-          symbol: symbol,
-          exchange: "asterdex",
-          currentPrice: currentPrice,
-          balance: {
-            equity: totalEquity,
-            availableBalance: availableBalance,
-            balanceInUse: balanceInUse,
-            unrealizedPnL: unrealizedPnL,
-            equity24hAgo: equity24hAgo,
-            equity24hChange: equity24hChange,
-            equity24hChangePercent: equity24hChangePercent,
-          },
-          positions: symbolPositions.map((pos: any) => {
-            const posAmt = Number(pos.positionAmt || pos.pa || 0);
-            return {
-              side: posAmt > 0 ? "LONG" : "SHORT",
-              contracts: Math.abs(posAmt),
-              avgPrice: Number(pos.entryPrice || pos.ep || 0),
-              unrealizedPnL: Number(
-                pos.unRealizedProfit || pos.unrealizedProfit || pos.upl || 0
-              ),
-              unrealizedPnLRatio:
-                Number(pos.unRealizedProfitRatio || pos.uplRatio || 0) * 100,
-              leverage: Number(pos.leverage || pos.lever || 1),
-              notionalUsd: Math.abs(
-                Number(pos.notional || pos.notionalUsd || 0)
-              ),
-              instId: symbol,
-            };
-          }),
-          buyOrders: buyOrders,
-          sellOrders: sellOrders,
-        });
-      } catch (symbolError: any) {
-        console.error(`Error processing symbol ${symbol}:`, symbolError);
-        // Continue with other symbols
       }
-    }
+    );
 
-    return results;
+    // Wait for all symbols to be processed in parallel
+    const symbolResults = await Promise.all(symbolPromises);
+
+    // Filter out null results and return
+    return symbolResults.filter((result) => result !== null);
   } catch (error: any) {
     console.error(
       `[Asterdex] Error processing account ${account.name}:`,
@@ -324,9 +330,8 @@ export async function GET() {
       fields: ["*"],
     });
 
-    const data = [];
-
-    for (const account of accounts) {
+    // Process all accounts in parallel for much better performance
+    const accountPromises = accounts.map(async (account) => {
       try {
         const exchange = account.exchange || "okx";
         const apiKey = account.api_key || process.env.OKX_API_KEY;
@@ -336,31 +341,32 @@ export async function GET() {
         // Handle different exchanges
         if (exchange === "asterdex") {
           if (!apiKey || !apiSecret) {
-            data.push({
-              accountId: account.id,
-              accountName: account.name || account.id,
-              symbol: "N/A",
-              exchange: "asterdex",
-              error: "Missing API credentials (API Key and Secret required)",
-            });
-            continue;
+            return [
+              {
+                accountId: account.id,
+                accountName: account.name || account.id,
+                symbol: "N/A",
+                exchange: "asterdex",
+                error: "Missing API credentials (API Key and Secret required)",
+              },
+            ];
           }
 
           const asterdex = new AsterdexClient(apiKey, apiSecret, true);
           const accountData = await processAsterdexAccount(asterdex, account);
-          // Flatten array results
-          data.push(...accountData);
+          return accountData;
         } else {
           // Default to OKX
           if (!apiKey || !apiSecret || !passphrase) {
-            data.push({
-              accountId: account.id,
-              accountName: account.name || account.id,
-              symbol: "N/A",
-              exchange: "okx",
-              error: "Missing API credentials",
-            });
-            continue;
+            return [
+              {
+                accountId: account.id,
+                accountName: account.name || account.id,
+                symbol: "N/A",
+                exchange: "okx",
+                error: "Missing API credentials",
+              },
+            ];
           }
 
           const okx = new OKXClient(apiKey, apiSecret, passphrase);
@@ -404,29 +410,22 @@ export async function GET() {
             positionsBySymbol.get(symbol)!.push(pos);
           }
 
-          // If no positions, skip this account
+          // If no positions, return empty array
           if (positionsBySymbol.size === 0) {
-            continue;
+            return [];
           }
 
           // Create a card for each symbol
+          const symbolResults = [];
           for (const [symbol, symbolPositions] of positionsBySymbol) {
             try {
               const currentPrice = await getTickerPrice(okx, symbol);
               const instrumentInfo = await getInstrumentInfo(okx, symbol);
               const ctVal = instrumentInfo?.ctVal || 1;
 
-              // Get grid levels from Redis for this symbol
-              const buyGridLevels = await getGridLevels(
-                account.id,
-                symbol,
-                "buy"
-              );
-              const sellGridLevels = await getGridLevels(
-                account.id,
-                symbol,
-                "sell"
-              );
+              // Get grid levels from Redis for this symbol (both sides in parallel)
+              const { buy: buyGridLevels, sell: sellGridLevels } =
+                await getGridLevelsBothSides(account.id, symbol);
 
               // Filter to only pending grid levels and convert to order format
               const buyOrders = buyGridLevels
@@ -470,7 +469,7 @@ export async function GET() {
                 JSON.stringify(sellOrders)
               );
 
-              data.push({
+              symbolResults.push({
                 accountId: account.id,
                 accountName: account.name || account.id,
                 symbol: symbol,
@@ -505,16 +504,26 @@ export async function GET() {
               // Continue with other symbols
             }
           }
+
+          return symbolResults;
         }
       } catch (error: any) {
-        data.push({
-          accountId: account.id,
-          accountName: account.name || account.id,
-          symbol: "ERROR",
-          error: error.message,
-        });
+        return [
+          {
+            accountId: account.id,
+            accountName: account.name || account.id,
+            symbol: "ERROR",
+            error: error.message,
+          },
+        ];
       }
-    }
+    });
+
+    // Wait for all accounts to be processed in parallel
+    const accountResults = await Promise.all(accountPromises);
+
+    // Flatten the results (each account returns an array)
+    const data = accountResults.flat();
 
     return NextResponse.json({
       timestamp: new Date().toISOString(),
