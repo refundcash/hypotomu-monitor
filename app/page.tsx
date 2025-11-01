@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +55,7 @@ interface Account {
 interface MonitorData {
   timestamp: string;
   accounts: Account[];
+  publishedSymbols?: string[];
 }
 
 export default function HomePage() {
@@ -68,6 +69,8 @@ export default function HomePage() {
     new Set()
   );
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(30);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -231,31 +234,39 @@ export default function HomePage() {
     }
   };
 
-  // Get unique symbols from all accounts
-  const uniqueSymbols = Array.from(
-    new Set(data?.accounts.map((account) => account.symbol) || [])
-  ).sort();
+  // Get unique symbols from all accounts - memoized for performance
+  const uniqueSymbols = useMemo(() => {
+    return Array.from(
+      new Set(data?.accounts.map((account) => account.symbol) || [])
+    ).sort();
+  }, [data?.accounts]);
 
   // Toggle symbol selection
-  const toggleSymbol = (symbol: string) => {
-    const newSelected = new Set(selectedSymbols);
-    if (newSelected.has(symbol)) {
-      newSelected.delete(symbol);
-    } else {
-      newSelected.add(symbol);
-    }
-    setSelectedSymbols(newSelected);
-  };
+  const toggleSymbol = useCallback((symbol: string) => {
+    setSelectedSymbols((prev) => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(symbol)) {
+        newSelected.delete(symbol);
+      } else {
+        newSelected.add(symbol);
+      }
+      return newSelected;
+    });
+    setCurrentPage(1); // Reset to first page when filter changes
+  }, []);
 
   // Clear all filters
-  const clearAllFilters = () => {
+  const clearAllFilters = useCallback(() => {
     setSearchQuery("");
     setSelectedSymbols(new Set());
-  };
+    setCurrentPage(1);
+  }, []);
 
-  // Filter accounts based on search query and selected symbols
-  const filteredAccounts =
-    data?.accounts.filter((account) => {
+  // Filter accounts based on search query and selected symbols - memoized for performance
+  const filteredAccounts = useMemo(() => {
+    if (!data?.accounts) return [];
+
+    return data.accounts.filter((account) => {
       // Filter by selected symbols
       if (selectedSymbols.size > 0 && !selectedSymbols.has(account.symbol)) {
         return false;
@@ -270,7 +281,19 @@ export default function HomePage() {
       const matchesExchange = account.exchange?.toLowerCase().includes(query);
 
       return matchesName || matchesSymbol || matchesExchange;
-    }) || [];
+    });
+  }, [data?.accounts, selectedSymbols, searchQuery]);
+
+  // Paginated accounts - memoized for performance
+  const paginatedAccounts = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredAccounts.slice(startIndex, endIndex);
+  }, [filteredAccounts, currentPage, itemsPerPage]);
+
+  const totalPages = useMemo(() => {
+    return Math.ceil(filteredAccounts.length / itemsPerPage);
+  }, [filteredAccounts.length, itemsPerPage]);
 
   if (status === "loading") {
     return (
@@ -443,6 +466,25 @@ export default function HomePage() {
                 </Button>
               </div>
             )}
+
+            <div className="flex items-center gap-2 ml-auto">
+              <label className="text-sm text-muted-foreground flex items-center gap-2">
+                Items per page:
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => {
+                    setItemsPerPage(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="px-2 py-1 rounded border border-input bg-background text-sm"
+                >
+                  <option value={30}>30</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           {selectedSymbols.size > 0 && (
@@ -503,7 +545,7 @@ export default function HomePage() {
               )}
             </div>
           ) : (
-            filteredAccounts.map((account) => (
+            paginatedAccounts.map((account) => (
               <Card
                 key={`${account.accountId}-${account.symbol}`}
                 className="overflow-hidden"
@@ -886,8 +928,49 @@ export default function HomePage() {
           )}
         </div>
 
+        {/* Pagination Controls */}
+        {!isInitialLoading && filteredAccounts.length > 0 && totalPages > 1 && (
+          <div className="flex justify-center items-center gap-4 mt-8">
+            <Button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              variant="outline"
+              size="sm"
+            >
+              First
+            </Button>
+            <Button
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              variant="outline"
+              size="sm"
+            >
+              Previous
+            </Button>
+            <div className="text-sm text-muted-foreground px-4">
+              Page {currentPage} of {totalPages} ({filteredAccounts.length} total)
+            </div>
+            <Button
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              variant="outline"
+              size="sm"
+            >
+              Next
+            </Button>
+            <Button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              variant="outline"
+              size="sm"
+            >
+              Last
+            </Button>
+          </div>
+        )}
+
         <div className="text-center text-muted-foreground text-sm py-6 mt-8">
-          Auto-refresh every 60 seconds
+          Auto-refresh every 10 minutes
         </div>
       </div>
     </div>

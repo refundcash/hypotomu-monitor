@@ -21,7 +21,7 @@ export function getRedisClient(): Redis {
 
 /**
  * Store equity snapshot for an account
- * Key format: equity:{accountId}:{timestamp}
+ * Key format: hypotom-monitor:equity:{accountId}:{timestamp}
  */
 export async function storeEquitySnapshot(
   accountId: string,
@@ -29,7 +29,7 @@ export async function storeEquitySnapshot(
 ): Promise<void> {
   const client = getRedisClient();
   const timestamp = Date.now();
-  const key = `equity:${accountId}:${timestamp}`;
+  const key = `hypotom-monitor:equity:${accountId}:${timestamp}`;
 
   // Store with 7 days TTL (in seconds)
   await client.setex(key, 7 * 24 * 60 * 60, equity.toString());
@@ -51,7 +51,7 @@ export async function getEquity24hAgo(
   const searchEnd = twentyFourHoursAgo + 60 * 60 * 1000; // 23h ago
 
   // Get all keys matching the pattern
-  const pattern = `equity:${accountId}:*`;
+  const pattern = `hypotom-monitor:equity:${accountId}:*`;
   const keys = await client.keys(pattern);
 
   if (keys.length === 0) {
@@ -64,7 +64,7 @@ export async function getEquity24hAgo(
 
   for (const key of keys) {
     const parts = key.split(":");
-    const timestamp = parseInt(parts[2]);
+    const timestamp = parseInt(parts[3]); // Updated index after adding prefix
 
     if (timestamp >= searchStart && timestamp <= searchEnd) {
       const diff = Math.abs(timestamp - twentyFourHoursAgo);
@@ -92,13 +92,13 @@ export async function cleanupOldSnapshots(): Promise<void> {
   const now = Date.now();
   const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-  const pattern = "equity:*";
+  const pattern = `hypotom-monitor:equity:*`;
   const keys = await client.keys(pattern);
 
   const deletePromises = keys
     .filter((key) => {
       const parts = key.split(":");
-      const timestamp = parseInt(parts[2]);
+      const timestamp = parseInt(parts[3]); // Updated index after adding prefix
       return timestamp < sevenDaysAgo;
     })
     .map((key) => client.del(key));
@@ -108,7 +108,7 @@ export async function cleanupOldSnapshots(): Promise<void> {
 
 /**
  * Store positions snapshot for an account
- * Key format: positions:{accountId}:{timestamp}
+ * Key format: hypotom-monitor:positions:{accountId}:{timestamp}
  */
 export async function storePositionsSnapshot(
   accountId: string,
@@ -116,13 +116,13 @@ export async function storePositionsSnapshot(
 ): Promise<void> {
   const client = getRedisClient();
   const timestamp = Date.now();
-  const key = `positions:${accountId}:${timestamp}`;
+  const key = `hypotom-monitor:positions:${accountId}:${timestamp}`;
 
   // Store with 30 days TTL (in seconds)
   await client.setex(key, 30 * 24 * 60 * 60, JSON.stringify(positions));
 
   // Also store the latest snapshot with a fixed key
-  const latestKey = `positions:${accountId}:latest`;
+  const latestKey = `hypotom-monitor:positions:${accountId}:latest`;
   await client.setex(
     latestKey,
     30 * 24 * 60 * 60,
@@ -135,7 +135,7 @@ export async function storePositionsSnapshot(
 
 /**
  * Store orders/trades snapshot for an account
- * Key format: orders:{accountId}:{timestamp}
+ * Key format: hypotom-monitor:orders:{accountId}:{timestamp}
  */
 export async function storeOrdersSnapshot(
   accountId: string,
@@ -143,13 +143,13 @@ export async function storeOrdersSnapshot(
 ): Promise<void> {
   const client = getRedisClient();
   const timestamp = Date.now();
-  const key = `orders:${accountId}:${timestamp}`;
+  const key = `hypotom-monitor:orders:${accountId}:${timestamp}`;
 
   // Store with 30 days TTL (in seconds)
   await client.setex(key, 30 * 24 * 60 * 60, JSON.stringify(orders));
 
   // Also store the latest snapshot with a fixed key
-  const latestKey = `orders:${accountId}:latest`;
+  const latestKey = `hypotom-monitor:orders:${accountId}:latest`;
   await client.setex(
     latestKey,
     30 * 24 * 60 * 60,
@@ -167,7 +167,7 @@ export async function getLatestPositions(
   accountId: string
 ): Promise<{ timestamp: number; data: any } | null> {
   const client = getRedisClient();
-  const key = `positions:${accountId}:latest`;
+  const key = `hypotom-monitor:positions:${accountId}:latest`;
   const value = await client.get(key);
   return value ? JSON.parse(value) : null;
 }
@@ -179,7 +179,7 @@ export async function getLatestOrders(
   accountId: string
 ): Promise<{ timestamp: number; data: any } | null> {
   const client = getRedisClient();
-  const key = `orders:${accountId}:latest`;
+  const key = `hypotom-monitor:orders:${accountId}:latest`;
   const value = await client.get(key);
   return value ? JSON.parse(value) : null;
 }
@@ -193,7 +193,7 @@ export async function getPositionsHistory(
   endTime: number
 ): Promise<Array<{ timestamp: number; data: any }>> {
   const client = getRedisClient();
-  const pattern = `positions:${accountId}:*`;
+  const pattern = `hypotom-monitor:positions:${accountId}:*`;
   const keys = await client.keys(pattern);
 
   const results = [];
@@ -201,7 +201,7 @@ export async function getPositionsHistory(
     if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
-    const timestamp = parseInt(parts[2]);
+    const timestamp = parseInt(parts[3]); // Updated index after adding prefix
 
     if (timestamp >= startTime && timestamp <= endTime) {
       const value = await client.get(key);
@@ -226,7 +226,7 @@ export async function getOrdersHistory(
   endTime: number
 ): Promise<Array<{ timestamp: number; data: any }>> {
   const client = getRedisClient();
-  const pattern = `orders:${accountId}:*`;
+  const pattern = `hypotom-monitor:orders:${accountId}:*`;
   const keys = await client.keys(pattern);
 
   const results = [];
@@ -234,7 +234,7 @@ export async function getOrdersHistory(
     if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
-    const timestamp = parseInt(parts[2]);
+    const timestamp = parseInt(parts[3]); // Updated index after adding prefix
 
     if (timestamp >= startTime && timestamp <= endTime) {
       const value = await client.get(key);
@@ -252,7 +252,7 @@ export async function getOrdersHistory(
 
 /**
  * Store trade history snapshot for an account
- * Key format: trades:{accountId}:{timestamp}
+ * Key format: hypotom-monitor:trades:{accountId}:{timestamp}
  */
 export async function storeTradeHistorySnapshot(
   accountId: string,
@@ -260,13 +260,13 @@ export async function storeTradeHistorySnapshot(
 ): Promise<void> {
   const client = getRedisClient();
   const timestamp = Date.now();
-  const key = `trades:${accountId}:${timestamp}`;
+  const key = `hypotom-monitor:trades:${accountId}:${timestamp}`;
 
   // Store forever (no TTL)
   await client.set(key, JSON.stringify(tradeHistory));
 
   // Also store the latest snapshot with a fixed key (no TTL)
-  const latestKey = `trades:${accountId}:latest`;
+  const latestKey = `hypotom-monitor:trades:${accountId}:latest`;
   await client.set(
     latestKey,
     JSON.stringify({
@@ -283,7 +283,7 @@ export async function getLatestTradeHistory(
   accountId: string
 ): Promise<{ timestamp: number; data: any } | null> {
   const client = getRedisClient();
-  const key = `trades:${accountId}:latest`;
+  const key = `hypotom-monitor:trades:${accountId}:latest`;
   const value = await client.get(key);
   return value ? JSON.parse(value) : null;
 }
@@ -297,7 +297,7 @@ export async function getTradeHistoryRange(
   endTime: number
 ): Promise<Array<{ timestamp: number; data: any }>> {
   const client = getRedisClient();
-  const pattern = `trades:${accountId}:*`;
+  const pattern = `hypotom-monitor:trades:${accountId}:*`;
   const keys = await client.keys(pattern);
 
   const results = [];
@@ -305,7 +305,7 @@ export async function getTradeHistoryRange(
     if (key.endsWith(":latest")) continue; // Skip the latest key
 
     const parts = key.split(":");
-    const timestamp = parseInt(parts[2]);
+    const timestamp = parseInt(parts[3]); // Updated index after adding prefix
 
     if (timestamp >= startTime && timestamp <= endTime) {
       const value = await client.get(key);

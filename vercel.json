@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/positions-snapshot",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/empty-accounts",
+      "schedule": "* * * * *"
     }
   ]
 }
