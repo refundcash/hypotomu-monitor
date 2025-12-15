@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 
     const apiKey = account.api_key || process.env.OKX_API_KEY;
     const apiSecret = account.api_secret || process.env.OKX_API_SECRET;
-    const passphrase = account.passphrase || process.env.OKX_PASSPHRASE;
+    const passphrase = account.api_passphrase || process.env.OKX_PASSPHRASE;
 
     if (!apiKey || !apiSecret || !passphrase) {
       return NextResponse.json(

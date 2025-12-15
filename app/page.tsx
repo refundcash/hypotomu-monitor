@@ -68,7 +68,11 @@ export default function HomePage() {
   const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(
     new Set()
   );
+  const [selectedExchanges, setSelectedExchanges] = useState<Set<string>>(
+    new Set()
+  );
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [isExchangeFilterOpen, setIsExchangeFilterOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(30);
 
@@ -241,6 +245,17 @@ export default function HomePage() {
     ).sort();
   }, [data?.accounts]);
 
+  // Get unique exchanges from all accounts - memoized for performance
+  const uniqueExchanges = useMemo(() => {
+    return Array.from(
+      new Set(
+        data?.accounts
+          .map((account) => account.exchange || "unknown")
+          .filter((exchange) => exchange !== "unknown")
+      ) || []
+    ).sort();
+  }, [data?.accounts]);
+
   // Toggle symbol selection
   const toggleSymbol = useCallback((symbol: string) => {
     setSelectedSymbols((prev) => {
@@ -255,20 +270,43 @@ export default function HomePage() {
     setCurrentPage(1); // Reset to first page when filter changes
   }, []);
 
+  // Toggle exchange selection
+  const toggleExchange = useCallback((exchange: string) => {
+    setSelectedExchanges((prev) => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(exchange)) {
+        newSelected.delete(exchange);
+      } else {
+        newSelected.add(exchange);
+      }
+      return newSelected;
+    });
+    setCurrentPage(1); // Reset to first page when filter changes
+  }, []);
+
   // Clear all filters
   const clearAllFilters = useCallback(() => {
     setSearchQuery("");
     setSelectedSymbols(new Set());
+    setSelectedExchanges(new Set());
     setCurrentPage(1);
   }, []);
 
-  // Filter accounts based on search query and selected symbols - memoized for performance
+  // Filter accounts based on search query, selected symbols, and exchanges - memoized for performance
   const filteredAccounts = useMemo(() => {
     if (!data?.accounts) return [];
 
     return data.accounts.filter((account) => {
       // Filter by selected symbols
       if (selectedSymbols.size > 0 && !selectedSymbols.has(account.symbol)) {
+        return false;
+      }
+
+      // Filter by selected exchanges
+      if (
+        selectedExchanges.size > 0 &&
+        !selectedExchanges.has(account.exchange || "unknown")
+      ) {
         return false;
       }
 
@@ -282,7 +320,7 @@ export default function HomePage() {
 
       return matchesName || matchesSymbol || matchesExchange;
     });
-  }, [data?.accounts, selectedSymbols, searchQuery]);
+  }, [data?.accounts, selectedSymbols, selectedExchanges, searchQuery]);
 
   // Paginated accounts - memoized for performance
   const paginatedAccounts = useMemo(() => {
@@ -377,6 +415,85 @@ export default function HomePage() {
             <div className="relative">
               <Button
                 variant="outline"
+                onClick={() => setIsExchangeFilterOpen(!isExchangeFilterOpen)}
+                className="flex items-center gap-2"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+                  />
+                </svg>
+                Exchanges
+                {selectedExchanges.size > 0 && (
+                  <Badge variant="secondary" className="ml-1">
+                    {selectedExchanges.size}
+                  </Badge>
+                )}
+              </Button>
+
+              {isExchangeFilterOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsExchangeFilterOpen(false)}
+                  />
+                  <div className="absolute top-full mt-2 right-0 z-50 w-64 bg-background border border-border rounded-lg shadow-lg p-3 max-h-96 overflow-y-auto">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <span className="text-sm font-semibold">
+                        Filter by Exchange
+                      </span>
+                      {selectedExchanges.size > 0 && (
+                        <button
+                          onClick={() => setSelectedExchanges(new Set())}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {uniqueExchanges.map((exchange) => {
+                        const count =
+                          data?.accounts.filter(
+                            (acc) => acc.exchange === exchange
+                          ).length || 0;
+                        return (
+                          <label
+                            key={exchange}
+                            className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 p-2 rounded"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedExchanges.has(exchange)}
+                              onChange={() => toggleExchange(exchange)}
+                              className="h-4 w-4 rounded border-input"
+                            />
+                            <span className="flex-1 text-sm capitalize">
+                              {exchange}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {count}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="relative">
+              <Button
+                variant="outline"
                 onClick={() => setIsFilterOpen(!isFilterOpen)}
                 className="flex items-center gap-2"
               >
@@ -450,7 +567,9 @@ export default function HomePage() {
               )}
             </div>
 
-            {(searchQuery || selectedSymbols.size > 0) && (
+            {(searchQuery ||
+              selectedSymbols.size > 0 ||
+              selectedExchanges.size > 0) && (
               <div className="flex items-center gap-2">
                 <div className="text-sm text-muted-foreground">
                   {filteredAccounts.length} result
@@ -487,11 +606,51 @@ export default function HomePage() {
             </div>
           </div>
 
-          {selectedSymbols.size > 0 && (
+          {(selectedSymbols.size > 0 || selectedExchanges.size > 0) && (
             <div className="flex flex-wrap gap-2">
+              {Array.from(selectedExchanges).map((exchange) => (
+                <Badge
+                  key={`exchange-${exchange}`}
+                  variant="default"
+                  className="flex items-center gap-1 pr-1 bg-blue-600"
+                >
+                  <svg
+                    className="h-3 w-3"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+                    />
+                  </svg>
+                  <span className="capitalize">{exchange}</span>
+                  <button
+                    onClick={() => toggleExchange(exchange)}
+                    className="ml-1 hover:bg-muted rounded-full p-0.5"
+                  >
+                    <svg
+                      className="h-3 w-3"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </Badge>
+              ))}
               {Array.from(selectedSymbols).map((symbol) => (
                 <Badge
-                  key={symbol}
+                  key={`symbol-${symbol}`}
                   variant="secondary"
                   className="flex items-center gap-1 pr-1"
                 >

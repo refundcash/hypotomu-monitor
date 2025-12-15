@@ -14,7 +14,7 @@ interface Account {
   symbol: string;
   api_key?: string;
   api_secret?: string;
-  passphrase?: string;
+  api_passphrase?: string;
   exchange?: string;
   status: string;
 }
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
         const exchange = account.exchange || "okx";
         const apiKey = account.api_key || process.env.OKX_API_KEY;
         const apiSecret = account.api_secret || process.env.OKX_API_SECRET;
-        const passphrase = account.passphrase || process.env.OKX_PASSPHRASE;
+        const passphrase = account.api_passphrase || process.env.OKX_PASSPHRASE;
 
         if (exchange === "asterdex") {
           if (!apiKey || !apiSecret) {

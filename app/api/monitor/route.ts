@@ -9,6 +9,9 @@ import {
   getEquity24hAgo,
   getGridLevels,
   getGridLevelsBothSides,
+  setMarketPrice,
+  getRedisClient,
+  getLatestPositions,
 } from "@/lib/redis";
 
 interface Account {
@@ -16,39 +19,81 @@ interface Account {
   name: string;
   api_key?: string;
   api_secret?: string;
-  passphrase?: string;
+  api_passphrase?: string;
   exchange?: string;
   status: string;
 }
 
-async function getAllPositions(okx: OKXClient) {
-  try {
-    const response = await okx.getPositions("SWAP");
-    if (response.code === "0" && response.data) {
-      return response.data.filter((pos: any) => Math.abs(Number(pos.pos)) > 0);
+// Removed - we no longer fetch positions or orders from exchange directly
+// These are now retrieved from Redis (updated by backend-cron every 2 minutes)
+
+/**
+ * Convert symbol between exchange formats
+ * AsterDex format: BTCUSDT (no hyphens)
+ * OKX format: BTC-USDT-SWAP (with hyphens and SWAP suffix)
+ */
+function convertSymbolFormat(symbol: string, targetExchange: "okx" | "asterdex"): string {
+  if (targetExchange === "okx") {
+    // Convert from AsterDex format (BTCUSDT) to OKX format (BTC-USDT-SWAP)
+    if (!symbol.includes("-") && symbol.endsWith("USDT")) {
+      const baseAsset = symbol.replace("USDT", "");
+      return `${baseAsset}-USDT-SWAP`;
     }
-    return [];
-  } catch (error) {
-    console.error("Error getting positions:", error);
-    return [];
+    // Already in OKX format
+    return symbol;
+  } else {
+    // Convert from OKX format (BTC-USDT-SWAP) to AsterDex format (BTCUSDT)
+    if (symbol.includes("-") && symbol.endsWith("-SWAP")) {
+      const baseAsset = symbol.replace("-USDT-SWAP", "");
+      return `${baseAsset}USDT`;
+    }
+    // Already in AsterDex format
+    return symbol;
   }
 }
-
-// Removed - we no longer fetch pending orders from exchange
-// Grid levels are stored in Redis instead
 
 async function getTickerPrice(okx: OKXClient, symbol: string) {
   try {
     const response = await okx.getTicker(symbol);
+    console.log(`[OKX] Ticker response for ${symbol}:`, JSON.stringify(response));
+
     if (response.code === "0" && response.data.length > 0) {
       const ticker = response.data[0];
       const bid = parseFloat(ticker.bidPx);
       const ask = parseFloat(ticker.askPx);
-      return (bid + ask) / 2;
+      const last = parseFloat(ticker.last);
+      const midPrice = (bid + ask) / 2;
+
+      console.log(`[OKX] Calculated mid price for ${symbol}: ${midPrice} (bid: ${bid}, ask: ${ask}, last: ${last})`);
+
+      // Store the mid price in Redis for OKX (matching ai-trading format)
+      try {
+        // Store with full price data structure
+        const priceData = {
+          price: midPrice,
+          bid,
+          ask,
+          last,
+          timestamp: Date.now(),
+          exchange: "okx",
+        };
+
+        const client = getRedisClient();
+        const key = `hypotomuai:okx:price:${symbol}`;
+        await client.setex(key, 60, JSON.stringify(priceData));
+
+        console.log(`[OKX] Successfully stored price in Redis: ${key} = ${midPrice}`);
+      } catch (redisError) {
+        console.error(`[OKX] Error storing price in Redis for ${symbol}:`, redisError);
+      }
+
+      return midPrice;
     }
+
+    console.log(`[OKX] No ticker data found for ${symbol}`);
     return null;
   } catch (error) {
-    console.error("Error getting ticker:", error);
+    console.error(`[OKX] Error getting ticker for ${symbol}:`, error);
     return null;
   }
 }
@@ -194,7 +239,7 @@ async function processAsterdexAccount(
         ] = await Promise.all([
           asterdex.getTicker(symbol),
           asterdex.getExchangeInfo(symbol),
-          getGridLevelsBothSides(account.id, symbol),
+          getGridLevelsBothSides(account.id, symbol, "asterdex"),
         ]);
 
         const currentPrice = tickerResponse?.lastPrice
@@ -204,6 +249,25 @@ async function processAsterdexAccount(
               Number(tickerResponse.askPrice)) /
             2
           : null;
+
+        console.log(
+          `[AsterDex] Calculated current price for ${symbol}: ${currentPrice}`
+        );
+
+        // Store the mid price in Redis for AsterDex
+        if (currentPrice !== null) {
+          try {
+            await setMarketPrice("asterdex", symbol, currentPrice);
+            console.log(
+              `[AsterDex] Successfully stored price in Redis: hypotomuai:asterdex:price:${symbol} = ${currentPrice}`
+            );
+          } catch (redisError) {
+            console.error(
+              `[AsterDex] Error storing price in Redis for ${symbol}:`,
+              redisError
+            );
+          }
+        }
 
         // Extract contract size from exchange info
         let contractSize = 1; // Default to 1 if not found
@@ -374,7 +438,7 @@ export async function GET() {
         const exchange = account.exchange || "okx";
         const apiKey = account.api_key || process.env.OKX_API_KEY;
         const apiSecret = account.api_secret || process.env.OKX_API_SECRET;
-        const passphrase = account.passphrase || process.env.OKX_PASSPHRASE;
+        const passphrase = account.api_passphrase || process.env.OKX_PASSPHRASE;
 
         // Handle different exchanges
         if (exchange === "asterdex") {
@@ -413,8 +477,12 @@ export async function GET() {
 
           const okx = new OKXClient(apiKey, apiSecret, passphrase);
 
-          // Get ALL positions
-          const positions = await getAllPositions(okx);
+          // Get positions from Redis (updated by backend-cron every 2 minutes)
+          const positionsSnapshot = await getLatestPositions(account.id);
+          const positions = positionsSnapshot?.data?.positions || [];
+
+          console.log(`[OKX] Retrieved ${positions.length} positions from Redis for account ${account.id}`);
+
           const balance = await getAccountBalance(okx);
 
           const balanceInUse = balance
@@ -440,17 +508,23 @@ export async function GET() {
             }
           }
 
-          // Group positions by symbol
+          // Group positions by symbol (convert OKX format to AsterDex format for consistency)
           const positionsBySymbol = new Map<string, any[]>();
           for (const pos of positions) {
-            const symbol = pos.instId;
-            if (!symbol) continue;
+            const okxSymbol = pos.instId; // e.g., "ETH-USDT-SWAP"
+            if (!okxSymbol) continue;
 
-            if (!positionsBySymbol.has(symbol)) {
-              positionsBySymbol.set(symbol, []);
+            // Convert OKX symbol to AsterDex format for grouping (ETH-USDT-SWAP -> ETHUSDT)
+            const normalizedSymbol = convertSymbolFormat(okxSymbol, "asterdex");
+            console.log(`[OKX] Position symbol normalization: ${okxSymbol} -> ${normalizedSymbol}`);
+
+            if (!positionsBySymbol.has(normalizedSymbol)) {
+              positionsBySymbol.set(normalizedSymbol, []);
             }
-            positionsBySymbol.get(symbol)!.push(pos);
+            positionsBySymbol.get(normalizedSymbol)!.push(pos);
           }
+
+          console.log(`[OKX] Grouped positions by symbols:`, Array.from(positionsBySymbol.keys()));
 
           // Get all symbols to check (positions + published symbols)
           const symbolsToCheck = new Set<string>([
@@ -468,13 +542,17 @@ export async function GET() {
           for (const symbol of symbolsToCheck) {
             const symbolPositions = positionsBySymbol.get(symbol) || [];
             try {
-              const currentPrice = await getTickerPrice(okx, symbol);
-              const instrumentInfo = await getInstrumentInfo(okx, symbol);
+              // Convert symbol to OKX format if needed (ETHUSDT -> ETH-USDT-SWAP)
+              const okxSymbol = convertSymbolFormat(symbol, "okx");
+              console.log(`[OKX] Symbol conversion: ${symbol} -> ${okxSymbol}`);
+
+              const currentPrice = await getTickerPrice(okx, okxSymbol);
+              const instrumentInfo = await getInstrumentInfo(okx, okxSymbol);
               const ctVal = instrumentInfo?.ctVal || 1;
 
               // Get grid levels from Redis for this symbol (both sides in parallel)
               const { buy: buyGridLevels, sell: sellGridLevels } =
-                await getGridLevelsBothSides(account.id, symbol);
+                await getGridLevelsBothSides(account.id, symbol, "okx");
 
               // Filter to only pending grid levels and convert to order format
               const buyOrders = buyGridLevels
@@ -526,6 +604,10 @@ export async function GET() {
               ) {
                 continue;
               }
+
+              console.log(
+                `[OKX] Adding symbol result for ${symbol}: currentPrice=${currentPrice}`
+              );
 
               symbolResults.push({
                 accountId: account.id,

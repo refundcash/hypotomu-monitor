@@ -332,18 +332,21 @@ export interface GridLevel {
 
 /**
  * Get grid levels for an account and symbol
- * Key format: hypotomuai:asterdex:mmgrid:{accountId}:{symbol}:{SIDE} (uppercase)
+ * Key format: hypotomuai:{exchange}:mmgrid:{accountId}:{symbol}:{SIDE} (uppercase)
  * Data is stored as a Redis Hash
  */
 export async function getGridLevels(
   accountId: string,
   symbol: string,
-  side: "buy" | "sell"
+  side: "buy" | "sell",
+  exchange: string = "asterdex"
 ): Promise<GridLevel[]> {
   const client = getRedisClient();
-  // Match the actual Redis structure: hypotomuai:asterdex:mmgrid:{accountId}:{symbol}:{SIDE}
+  // Match the actual Redis structure: hypotomuai:{exchange}:mmgrid:{accountId}:{symbol}:{SIDE}
   const sideUpper = side.toUpperCase();
-  const key = `hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:${sideUpper}`;
+  const key = `hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:${sideUpper}`;
+
+  console.log(`[Redis] Getting grid levels: ${key}`);
 
   try {
     const data = await client.hgetall(key);
@@ -382,7 +385,7 @@ export async function getGridLevels(
 
 /**
  * Set a grid level for an account and symbol
- * Key format: hypotomuai:asterdex:mmgrid:{accountId}:{symbol}:{SIDE} (uppercase)
+ * Key format: hypotomuai:{exchange}:mmgrid:{accountId}:{symbol}:{SIDE} (uppercase)
  * Field: level_{index}
  */
 export async function setGridLevel(
@@ -390,11 +393,12 @@ export async function setGridLevel(
   symbol: string,
   side: "buy" | "sell",
   levelIndex: number,
-  level: GridLevel
+  level: GridLevel,
+  exchange: string = "asterdex"
 ): Promise<void> {
   const client = getRedisClient();
   const sideUpper = side.toUpperCase();
-  const key = `hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:${sideUpper}`;
+  const key = `hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:${sideUpper}`;
   const field = `level_${levelIndex}`;
 
   await client.hset(key, field, JSON.stringify(level));
@@ -406,18 +410,19 @@ export async function setGridLevel(
 export async function clearGridLevels(
   accountId: string,
   symbol: string,
-  side?: "buy" | "sell"
+  side?: "buy" | "sell",
+  exchange: string = "asterdex"
 ): Promise<void> {
   const client = getRedisClient();
 
   if (side) {
     const sideUpper = side.toUpperCase();
-    const key = `hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:${sideUpper}`;
+    const key = `hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:${sideUpper}`;
     await client.del(key);
   } else {
     // Clear both buy and sell
-    await client.del(`hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:BUY`);
-    await client.del(`hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:SELL`);
+    await client.del(`hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:BUY`);
+    await client.del(`hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:SELL`);
   }
 }
 
@@ -428,11 +433,12 @@ export async function deleteGridLevel(
   accountId: string,
   symbol: string,
   side: "buy" | "sell",
-  levelIndex: number
+  levelIndex: number,
+  exchange: string = "asterdex"
 ): Promise<void> {
   const client = getRedisClient();
   const sideUpper = side.toUpperCase();
-  const key = `hypotomuai:asterdex:mmgrid:${accountId}:${symbol}:${sideUpper}`;
+  const key = `hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:${sideUpper}`;
   const field = `level_${levelIndex}`;
 
   await client.hdel(key, field);
@@ -451,16 +457,17 @@ export interface AccountState {
 
 /**
  * Store account state for a symbol
- * Key format: hypotomuai:asterdex:mmgrid:state:{accountId}:{symbol}
+ * Key format: hypotomuai:{exchange}:mmgrid:state:{accountId}:{symbol}
  * TTL: 5 minutes (300 seconds)
  */
 export async function setAccountState(
   accountId: string,
   symbol: string,
-  state: AccountState
+  state: AccountState,
+  exchange: string = "asterdex"
 ): Promise<void> {
   const client = getRedisClient();
-  const key = `hypotomuai:asterdex:mmgrid:state:${accountId}:${symbol}`;
+  const key = `hypotomuai:${exchange}:mmgrid:state:${accountId}:${symbol}`;
 
   // Store with 5 min TTL
   await client.setex(key, 300, JSON.stringify(state));
@@ -468,14 +475,15 @@ export async function setAccountState(
 
 /**
  * Get account state for a symbol
- * Key format: hypotomuai:asterdex:mmgrid:state:{accountId}:{symbol}
+ * Key format: hypotomuai:{exchange}:mmgrid:state:{accountId}:{symbol}
  */
 export async function getAccountState(
   accountId: string,
-  symbol: string
+  symbol: string,
+  exchange: string = "asterdex"
 ): Promise<AccountState | null> {
   const client = getRedisClient();
-  const key = `hypotomuai:asterdex:mmgrid:state:${accountId}:${symbol}`;
+  const key = `hypotomuai:${exchange}:mmgrid:state:${accountId}:${symbol}`;
 
   try {
     const value = await client.get(key);
@@ -491,23 +499,29 @@ export async function getAccountState(
 
 /**
  * Market Price Interface
+ * Matches the format used by ai-trading OKX price service
  */
 export interface MarketPrice {
   price: number;
+  bid?: number;
+  ask?: number;
+  last?: number;
   timestamp: number;
+  exchange?: string;
 }
 
 /**
  * Store market price for a symbol
- * Key format: hypotomuai:asterdex:price:{symbol}
+ * Key format: hypotomuai:{exchange}:price:{symbol}
  * TTL: 60 seconds
  */
 export async function setMarketPrice(
+  exchange: string,
   symbol: string,
   price: number
 ): Promise<void> {
   const client = getRedisClient();
-  const key = `hypotomuai:asterdex:price:${symbol}`;
+  const key = `hypotomuai:${exchange}:price:${symbol}`;
 
   const data: MarketPrice = {
     price,
@@ -520,19 +534,20 @@ export async function setMarketPrice(
 
 /**
  * Get market price for a symbol
- * Key format: hypotomuai:asterdex:price:{symbol}
+ * Key format: hypotomuai:{exchange}:price:{symbol}
  */
 export async function getMarketPrice(
+  exchange: string,
   symbol: string
 ): Promise<MarketPrice | null> {
   const client = getRedisClient();
-  const key = `hypotomuai:asterdex:price:${symbol}`;
+  const key = `hypotomuai:${exchange}:price:${symbol}`;
 
   try {
     const value = await client.get(key);
     return value ? JSON.parse(value) : null;
   } catch (error) {
-    console.error(`Error getting market price for ${symbol}:`, error);
+    console.error(`Error getting market price for ${exchange}:${symbol}:`, error);
     return null;
   }
 }
@@ -621,11 +636,12 @@ export async function batchGetGridLevels(
  */
 export async function getGridLevelsBothSides(
   accountId: string,
-  symbol: string
+  symbol: string,
+  exchange: string = "asterdex"
 ): Promise<{ buy: GridLevel[]; sell: GridLevel[] }> {
   const [buy, sell] = await Promise.all([
-    getGridLevels(accountId, symbol, "buy"),
-    getGridLevels(accountId, symbol, "sell"),
+    getGridLevels(accountId, symbol, "buy", exchange),
+    getGridLevels(accountId, symbol, "sell", exchange),
   ]);
 
   return { buy, sell };
