@@ -12,6 +12,7 @@ import {
   setMarketPrice,
   getRedisClient,
   getLatestPositions,
+  getLatestAccountBalance,
 } from "@/lib/redis";
 
 interface Account {
@@ -136,30 +137,6 @@ async function getInstrumentInfo(okx: OKXClient, symbol: string) {
   }
 }
 
-async function getAccountBalance(okx: OKXClient) {
-  try {
-    const response = await okx.getAccountBalance();
-    if (response.code === "0" && response.data && response.data.length > 0) {
-      const accountData = response.data[0];
-      const details = accountData.details?.[0] || {};
-
-      return {
-        totalEquity: Number(accountData.totalEq || 0),
-        availableBalance: Number(details.availBal || 0),
-        frozenBalance: Number(details.frozenBal || 0),
-        equity: Number(details.eq || 0),
-        upl: Number(accountData.upl || 0),
-        isoEq: Number(accountData.isoEq || 0),
-        marginFrozen: Number(accountData.mgnRatio || 0),
-      };
-    }
-    return null;
-  } catch (error) {
-    console.error("Error getting balance:", error);
-    return null;
-  }
-}
-
 async function processAsterdexAccount(
   asterdex: AsterdexClient,
   account: Account,
@@ -167,44 +144,21 @@ async function processAsterdexAccount(
   priceMap: Map<string, number | null>
 ) {
   try {
-    // Get account balance
-    const balanceResponse = await asterdex.getAccountBalance();
-    const balances = Array.isArray(balanceResponse)
-      ? balanceResponse
-      : balanceResponse?.data || [];
-    const usdtBalance = balances.find(
-      (b: any) => b.asset === "USDT" || b.a === "USDT"
-    );
-
-    // Get ALL positions (not filtered by symbol)
-    const positionsResponse = await asterdex.getPositions();
-
-    const positions = Array.isArray(positionsResponse)
-      ? positionsResponse
-      : positionsResponse?.data || [];
+    // Get positions from Redis (updated by backend-cron every 2 minutes)
+    const positionsSnapshot = await getLatestPositions(account.id);
+    const positions = positionsSnapshot?.data?.positions || [];
     const activePositions = positions.filter(
       (pos: any) => Math.abs(Number(pos.positionAmt || pos.pa || 0)) > 0
     );
 
-    // Calculate balance info
-    const totalEquity = Number(
-      usdtBalance?.balance || usdtBalance?.wb || usdtBalance?.walletBalance || 0
-    );
-    const availableBalance = Number(
-      usdtBalance?.availableBalance ||
-        usdtBalance?.ab ||
-        usdtBalance?.availBal ||
-        0
-    );
-    const balanceInUse = totalEquity - availableBalance;
+    // Get balance from Redis (updated by backend-cron every 10 minutes)
+    const balanceSnapshot = await getLatestAccountBalance(account.id);
+    const balanceData = balanceSnapshot?.data;
 
-    // Calculate total unrealized PnL from positions
-    const unrealizedPnL = activePositions.reduce((sum: number, pos: any) => {
-      return (
-        sum +
-        Number(pos.unRealizedProfit || pos.unrealizedProfit || pos.upl || 0)
-      );
-    }, 0);
+    const totalEquity = balanceData ? Number(balanceData.totalMarginBalance || 0) : 0;
+    const availableBalance = balanceData ? Number(balanceData.availableBalance || 0) : 0;
+    const unrealizedPnL = balanceData ? Number(balanceData.totalUnrealizedProfit || 0) : 0;
+    const balanceInUse = totalEquity - availableBalance;
 
     // Get 24h equity comparison
     let equity24hAgo: number | null = null;
@@ -213,7 +167,6 @@ async function processAsterdexAccount(
 
     if (totalEquity > 0) {
       try {
-        await storeEquitySnapshot(account.id, totalEquity);
         equity24hAgo = await getEquity24hAgo(account.id);
 
         if (equity24hAgo !== null) {
@@ -527,24 +480,26 @@ export async function GET() {
           const positionsSnapshot = await getLatestPositions(account.id);
           const positions = positionsSnapshot?.data?.positions || [];
 
-          const balance = await getAccountBalance(okx);
+          // Get balance from Redis (updated by backend-cron every 10 minutes)
+          const balanceSnapshot = await getLatestAccountBalance(account.id);
+          const balanceData = balanceSnapshot?.data;
 
-          const balanceInUse = balance
-            ? balance.totalEquity - balance.availableBalance
-            : 0;
+          const totalEquity = balanceData ? Number(balanceData.totalMarginBalance || 0) : 0;
+          const availableBalance = balanceData ? Number(balanceData.availableBalance || 0) : 0;
+          const unrealizedPnL = balanceData ? Number(balanceData.totalUnrealizedProfit || 0) : 0;
+          const balanceInUse = totalEquity - availableBalance;
 
           // Get 24h equity comparison
           let equity24hAgo: number | null = null;
           let equity24hChange: number | null = null;
           let equity24hChangePercent: number | null = null;
 
-          if (balance) {
+          if (totalEquity > 0) {
             try {
-              await storeEquitySnapshot(account.id, balance.totalEquity);
               equity24hAgo = await getEquity24hAgo(account.id);
 
               if (equity24hAgo !== null) {
-                equity24hChange = balance.totalEquity - equity24hAgo;
+                equity24hChange = totalEquity - equity24hAgo;
                 equity24hChangePercent = (equity24hChange / equity24hAgo) * 100;
               }
             } catch (error) {
@@ -673,12 +628,12 @@ export async function GET() {
                 symbol: symbol,
                 exchange: "okx",
                 currentPrice: formatPrice(currentPrice),
-                balance: balance
+                balance: balanceData
                   ? {
-                      equity: balance.totalEquity,
-                      availableBalance: balance.availableBalance,
+                      equity: totalEquity,
+                      availableBalance: availableBalance,
                       balanceInUse: balanceInUse,
-                      unrealizedPnL: balance.upl,
+                      unrealizedPnL: unrealizedPnL,
                       equity24hAgo: equity24hAgo,
                       equity24hChange: equity24hChange,
                       equity24hChangePercent: equity24hChangePercent,

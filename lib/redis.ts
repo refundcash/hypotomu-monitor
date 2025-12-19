@@ -643,3 +643,35 @@ export async function getGridLevelsBothSides(
 
   return { buy, sell };
 }
+
+/**
+ * Account Balance Interface
+ * Normalized structure for both OKX and AsterDex balance data
+ */
+export interface AccountBalance {
+  totalWalletBalance: string;
+  totalUnrealizedProfit: string;
+  totalMarginBalance: string;
+  availableBalance: string;
+  updateTime: number;
+}
+
+/**
+ * Get latest account balance snapshot for an account
+ * Key format: hypotom-monitor:account:{accountId}:latest
+ * Returns normalized balance data from backend-cron equity snapshot
+ */
+export async function getLatestAccountBalance(
+  accountId: string
+): Promise<{ timestamp: number; data: AccountBalance } | null> {
+  const client = getRedisClient();
+  const key = `hypotom-monitor:account:${accountId}:latest`;
+
+  try {
+    const value = await client.get(key);
+    return value ? JSON.parse(value) : null;
+  } catch (error) {
+    console.error(`Error getting account balance for ${accountId}:`, error);
+    return null;
+  }
+}

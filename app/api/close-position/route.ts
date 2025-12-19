@@ -126,7 +126,15 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      return NextResponse.json({ success: true, results });
+      const successCount = results.filter(r => r.success).length;
+      const hasAnySuccess = successCount > 0;
+
+      return NextResponse.json({
+        success: hasAnySuccess,
+        successCount,
+        totalCount: results.length,
+        results
+      });
     }
 
     // OKX exchange
@@ -226,7 +234,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, results });
+    const successCount = results.filter(r => r.success).length;
+    const hasAnySuccess = successCount > 0;
+
+    return NextResponse.json({
+      success: hasAnySuccess,
+      successCount,
+      totalCount: results.length,
+      results
+    });
   } catch (error: any) {
     console.error("Error closing position:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

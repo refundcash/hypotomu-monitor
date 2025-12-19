@@ -120,10 +120,14 @@ export default function HomePage() {
 
       const result = await response.json();
       if (result.success) {
-        alert("Position closed successfully!");
+        if (result.successCount && result.totalCount && result.successCount < result.totalCount) {
+          alert(`Partially closed: ${result.successCount}/${result.totalCount} positions closed successfully`);
+        } else {
+          alert("Position closed successfully!");
+        }
         fetchData();
       } else {
-        alert("Error: " + (result.error || "Unknown error"));
+        alert("Error: " + (result.error || "Failed to close positions"));
       }
     } catch (error: any) {
       alert("Failed to close position: " + error.message);
