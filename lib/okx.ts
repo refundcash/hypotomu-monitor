@@ -14,6 +14,15 @@ interface OrderData {
   reduceOnly?: boolean;
 }
 
+// In-memory cache for instrument info to prevent 429 rate limit errors
+interface InstrumentCache {
+  data: any;
+  timestamp: number;
+}
+
+const instrumentCache = new Map<string, InstrumentCache>();
+const INSTRUMENT_CACHE_TTL = 3600000; // 1 hour in milliseconds
+
 export class OKXClient {
   private apiKey: string;
   private secretKey: string;
@@ -65,11 +74,21 @@ export class OKXClient {
     const pathWithParams = path + queryParams;
 
     const headers = await this.getHeaders("GET", pathWithParams);
+
     const response = await this.axios.get(pathWithParams, { headers });
     return response.data;
   }
 
   async getInstrumentInfo(instId: string) {
+    // Check cache first
+    const cached = instrumentCache.get(instId);
+    const now = Date.now();
+
+    if (cached && now - cached.timestamp < INSTRUMENT_CACHE_TTL) {
+      return cached.data;
+    }
+
+    // Cache miss or expired - fetch from API
     const path = "/api/v5/public/instruments";
     const response = await this.axios.get(path, {
       params: {
@@ -77,6 +96,13 @@ export class OKXClient {
         instId,
       },
     });
+
+    // Store in cache
+    instrumentCache.set(instId, {
+      data: response.data,
+      timestamp: now,
+    });
+
     return response.data;
   }
 

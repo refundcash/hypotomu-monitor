@@ -346,8 +346,6 @@ export async function getGridLevels(
   const sideUpper = side.toUpperCase();
   const key = `hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:${sideUpper}`;
 
-  console.log(`[Redis] Getting grid levels: ${key}`);
-
   try {
     const data = await client.hgetall(key);
 
@@ -442,7 +440,6 @@ export async function deleteGridLevel(
   const field = `level_${levelIndex}`;
 
   await client.hdel(key, field);
-  console.log(`[Redis] Deleted grid level ${field} from ${key}`);
 }
 
 /**

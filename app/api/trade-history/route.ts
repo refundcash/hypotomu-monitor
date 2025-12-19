@@ -95,9 +95,6 @@ export async function GET(request: Request) {
 
     if (cachedData && cachedData.data) {
       const { data } = cachedData;
-      console.log(
-        `[TradeHistory] Using cached data from Redis for account ${accountId}`
-      );
 
       // Filter trades by time range if specified
       let filteredTrades = data.trades || [];
@@ -146,10 +143,6 @@ export async function GET(request: Request) {
         cachedAt: cachedData.timestamp,
       });
     }
-
-    console.log(
-      `[TradeHistory] No cached data found, fetching from API for account ${accountId}`
-    );
 
     // Determine which symbols to fetch
     let symbolsToFetch: string[] = [];

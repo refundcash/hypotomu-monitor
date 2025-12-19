@@ -47,20 +47,20 @@ export async function POST(request: NextRequest) {
 
     const account = Array.isArray(accounts) ? accounts[0] : accounts;
 
+    const exchange = account.exchange || "okx";
     const apiKey = account.api_key || process.env.OKX_API_KEY;
     const apiSecret = account.api_secret || process.env.OKX_API_SECRET;
     const passphrase = account.api_passphrase || process.env.OKX_PASSPHRASE;
 
-    if (!apiKey || !apiSecret || !passphrase) {
-      return NextResponse.json(
-        { error: "Missing API credentials" },
-        { status: 500 }
-      );
-    }
-
-    const exchange = account.exchange || "okx";
-
+    // Validate credentials based on exchange type
     if (exchange === "asterdex") {
+      if (!apiKey || !apiSecret) {
+        return NextResponse.json(
+          { error: "Missing API credentials for Asterdex (API Key and Secret required)" },
+          { status: 500 }
+        );
+      }
+
       const asterdex = new AsterdexClient(apiKey, apiSecret, true);
 
       const positionsResponse = await asterdex.getPositions(symbol);
@@ -95,9 +95,7 @@ export async function POST(request: NextRequest) {
             quantity: closeSize.toFixed(2),
           };
 
-          console.log(`[Asterdex] Placing close order:`, orderData);
           const response = await asterdex.placeOrder(orderData);
-          console.log(`[Asterdex] Close order response:`, JSON.stringify(response));
 
           // Check if order was successful
           const isSuccess = response.orderId || response.clientOrderId || response.i;
@@ -131,12 +129,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, results });
     }
 
+    // OKX exchange
+    if (!apiKey || !apiSecret || !passphrase) {
+      return NextResponse.json(
+        { error: "Missing API credentials for OKX (API Key, Secret, and Passphrase required)" },
+        { status: 500 }
+      );
+    }
+
     const okx = new OKXClient(apiKey, apiSecret, passphrase);
 
     const positionsResponse = await okx.getPositions("SWAP");
+
+    // Convert symbol to OKX format if needed (BTCUSDT -> BTC-USDT-SWAP)
+    let okxSymbol = symbol;
+    if (!symbol.includes("-") && symbol.endsWith("USDT")) {
+      const baseAsset = symbol.replace("USDT", "");
+      okxSymbol = `${baseAsset}-USDT-SWAP`;
+    }
+
     const positions = positionsResponse.data.filter(
       (pos: any) =>
-        pos.instId === symbol && Math.abs(Number(pos.pos)) > 0
+        pos.instId === okxSymbol && Math.abs(Number(pos.pos)) > 0
     );
 
     if (positions.length === 0) {
@@ -147,7 +161,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const instrumentResponse = await okx.getInstrumentInfo(symbol);
+    const instrumentResponse = await okx.getInstrumentInfo(okxSymbol);
     const lotSz =
       instrumentResponse.code === "0" && instrumentResponse.data.length > 0
         ? parseFloat(instrumentResponse.data[0].lotSz)

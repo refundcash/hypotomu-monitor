@@ -22,10 +22,27 @@ interface Account {
   api_passphrase?: string;
   exchange?: string;
   status: string;
+  trading_symbols?: Array<{
+    trading_symbols_id: {
+      id: string;
+      name: string;
+      status: string;
+    };
+  }>;
 }
 
 // Removed - we no longer fetch positions or orders from exchange directly
 // These are now retrieved from Redis (updated by backend-cron every 2 minutes)
+
+/**
+ * Format price with appropriate decimal places
+ * Returns number rounded to avoid floating point precision issues
+ */
+function formatPrice(price: number | null): number | null {
+  if (price === null) return null;
+  // Use 3 decimal places for crypto prices
+  return Number(price.toFixed(3));
+}
 
 /**
  * Convert symbol between exchange formats
@@ -55,16 +72,20 @@ function convertSymbolFormat(symbol: string, targetExchange: "okx" | "asterdex")
 async function getTickerPrice(okx: OKXClient, symbol: string) {
   try {
     const response = await okx.getTicker(symbol);
-    console.log(`[OKX] Ticker response for ${symbol}:`, JSON.stringify(response));
 
     if (response.code === "0" && response.data.length > 0) {
       const ticker = response.data[0];
       const bid = parseFloat(ticker.bidPx);
       const ask = parseFloat(ticker.askPx);
       const last = parseFloat(ticker.last);
-      const midPrice = (bid + ask) / 2;
 
-      console.log(`[OKX] Calculated mid price for ${symbol}: ${midPrice} (bid: ${bid}, ask: ${ask}, last: ${last})`);
+      // Check for invalid prices
+      if (isNaN(bid) || isNaN(ask) || bid <= 0 || ask <= 0) {
+        console.error(`[OKX] Invalid ticker prices for ${symbol}: bid=${bid}, ask=${ask}`);
+        return null;
+      }
+
+      const midPrice = (bid + ask) / 2;
 
       // Store the mid price in Redis for OKX (matching ai-trading format)
       try {
@@ -81,8 +102,6 @@ async function getTickerPrice(okx: OKXClient, symbol: string) {
         const client = getRedisClient();
         const key = `hypotomuai:okx:price:${symbol}`;
         await client.setex(key, 60, JSON.stringify(priceData));
-
-        console.log(`[OKX] Successfully stored price in Redis: ${key} = ${midPrice}`);
       } catch (redisError) {
         console.error(`[OKX] Error storing price in Redis for ${symbol}:`, redisError);
       }
@@ -90,10 +109,11 @@ async function getTickerPrice(okx: OKXClient, symbol: string) {
       return midPrice;
     }
 
-    console.log(`[OKX] No ticker data found for ${symbol}`);
+    console.error(`[OKX] No ticker data found for ${symbol}, response:`, JSON.stringify(response));
     return null;
-  } catch (error) {
-    console.error(`[OKX] Error getting ticker for ${symbol}:`, error);
+  } catch (error: any) {
+    console.error(`[OKX] Error getting ticker for ${symbol}:`, error.message);
+    console.error(`[OKX] Full error details:`, error);
     return null;
   }
 }
@@ -143,7 +163,8 @@ async function getAccountBalance(okx: OKXClient) {
 async function processAsterdexAccount(
   asterdex: AsterdexClient,
   account: Account,
-  publishedSymbols: Set<string>
+  accountSymbols: Set<string>,
+  priceMap: Map<string, number | null>
 ) {
   try {
     // Get account balance
@@ -216,10 +237,10 @@ async function processAsterdexAccount(
       positionsBySymbol.get(symbol)!.push(pos);
     }
 
-    // Get all symbols to check (positions + published symbols)
+    // Get all symbols to check (positions + account symbols)
     const symbolsToCheck = new Set<string>([
       ...Array.from(positionsBySymbol.keys()),
-      ...publishedSymbols,
+      ...accountSymbols,
     ]);
 
     // If no symbols to check, return empty result
@@ -231,43 +252,17 @@ async function processAsterdexAccount(
     const symbolPromises = Array.from(symbolsToCheck).map(async (symbol) => {
       const symbolPositions = positionsBySymbol.get(symbol) || [];
       try {
-        // Fetch all data for this symbol in parallel
+        // Get pre-fetched price from the price map
+        const currentPrice = priceMap.get(symbol) || null;
+
+        // Fetch exchange info and grid levels in parallel
         const [
-          tickerResponse,
           exchangeInfo,
           { buy: buyGridLevels, sell: sellGridLevels },
         ] = await Promise.all([
-          asterdex.getTicker(symbol),
           asterdex.getExchangeInfo(symbol),
           getGridLevelsBothSides(account.id, symbol, "asterdex"),
         ]);
-
-        const currentPrice = tickerResponse?.lastPrice
-          ? Number(tickerResponse.lastPrice)
-          : tickerResponse?.bidPrice && tickerResponse?.askPrice
-          ? (Number(tickerResponse.bidPrice) +
-              Number(tickerResponse.askPrice)) /
-            2
-          : null;
-
-        console.log(
-          `[AsterDex] Calculated current price for ${symbol}: ${currentPrice}`
-        );
-
-        // Store the mid price in Redis for AsterDex
-        if (currentPrice !== null) {
-          try {
-            await setMarketPrice("asterdex", symbol, currentPrice);
-            console.log(
-              `[AsterDex] Successfully stored price in Redis: hypotomuai:asterdex:price:${symbol} = ${currentPrice}`
-            );
-          } catch (redisError) {
-            console.error(
-              `[AsterDex] Error storing price in Redis for ${symbol}:`,
-              redisError
-            );
-          }
-        }
 
         // Extract contract size from exchange info
         let contractSize = 1; // Default to 1 if not found
@@ -288,14 +283,14 @@ async function processAsterdexAccount(
             const sizeUSD = (level as any).sizeUSD || 0;
             const price = level.price || 0;
             return {
-              price: price,
+              price: formatPrice(price),
               size: sizeContracts,
               value: sizeUSD,
               orderId: `grid_buy_${idx}`,
               instId: symbol,
             };
           })
-          .sort((a, b) => b.price - a.price); // Highest price first
+          .sort((a, b) => (b.price || 0) - (a.price || 0)); // Highest price first
 
         const sellOrders = sellGridLevels
           .filter((level) => level.status === "pending")
@@ -304,30 +299,57 @@ async function processAsterdexAccount(
             const sizeUSD = (level as any).sizeUSD || 0;
             const price = level.price || 0;
             return {
-              price: price,
+              price: formatPrice(price),
               size: sizeContracts,
               value: sizeUSD,
               orderId: `grid_sell_${idx}`,
               instId: symbol,
             };
           })
-          .sort((a, b) => a.price - b.price); // Lowest price first
+          .sort((a, b) => (a.price || 0) - (b.price || 0)); // Lowest price first
 
-        // Skip if no positions AND no grid levels
+        // Only skip if symbol has no positions, no grid levels, AND no current price
+        // This ensures we still show mid price for published symbols even without positions
         if (
           symbolPositions.length === 0 &&
           buyOrders.length === 0 &&
-          sellOrders.length === 0
+          sellOrders.length === 0 &&
+          currentPrice === null
         ) {
           return null;
         }
+
+        const positions = symbolPositions.map((pos: any) => {
+          const posAmt = Number(pos.positionAmt || pos.pa || 0);
+          return {
+            side: posAmt > 0 ? "LONG" : "SHORT",
+            contracts: Math.abs(posAmt),
+            avgPrice: Number(pos.entryPrice || pos.ep || 0),
+            unrealizedPnL: Number(
+              pos.unRealizedProfit || pos.unrealizedProfit || pos.upl || 0
+            ),
+            unrealizedPnLRatio:
+              Number(pos.unRealizedProfitRatio || pos.uplRatio || 0) * 100,
+            leverage: Number(pos.leverage || pos.lever || 1),
+            notionalUsd: Math.abs(
+              Number(pos.notional || pos.notionalUsd || 0)
+            ),
+            instId: symbol,
+          };
+        });
+
+        // Calculate total position value for sorting
+        const totalPositionValue = positions.reduce(
+          (sum, pos) => sum + pos.notionalUsd,
+          0
+        );
 
         return {
           accountId: account.id,
           accountName: account.name || account.id,
           symbol: symbol,
           exchange: "asterdex",
-          currentPrice: currentPrice,
+          currentPrice: formatPrice(currentPrice),
           balance: {
             equity: totalEquity,
             availableBalance: availableBalance,
@@ -337,26 +359,10 @@ async function processAsterdexAccount(
             equity24hChange: equity24hChange,
             equity24hChangePercent: equity24hChangePercent,
           },
-          positions: symbolPositions.map((pos: any) => {
-            const posAmt = Number(pos.positionAmt || pos.pa || 0);
-            return {
-              side: posAmt > 0 ? "LONG" : "SHORT",
-              contracts: Math.abs(posAmt),
-              avgPrice: Number(pos.entryPrice || pos.ep || 0),
-              unrealizedPnL: Number(
-                pos.unRealizedProfit || pos.unrealizedProfit || pos.upl || 0
-              ),
-              unrealizedPnLRatio:
-                Number(pos.unRealizedProfitRatio || pos.uplRatio || 0) * 100,
-              leverage: Number(pos.leverage || pos.lever || 1),
-              notionalUsd: Math.abs(
-                Number(pos.notional || pos.notionalUsd || 0)
-              ),
-              instId: symbol,
-            };
-          }),
+          positions: positions,
           buyOrders: buyOrders,
           sellOrders: sellOrders,
+          totalPositionValue: totalPositionValue,
         };
       } catch (symbolError: any) {
         console.error(`Error processing symbol ${symbol}:`, symbolError);
@@ -398,12 +404,6 @@ async function processAsterdexAccount(
   }
 }
 
-interface TradingSymbol {
-  id: string;
-  name: string;
-  status: string;
-}
-
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
@@ -412,29 +412,73 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Fetch published trading symbols to filter accounts
-    const tradingSymbols = await fetchItems<TradingSymbol[]>(
-      "trading_symbols",
-      {
-        filter: { status: { _eq: "published" } },
-        limit: -1,
-        fields: ["name"],
-      }
-    );
-
-    const publishedSymbols = new Set(tradingSymbols.map((s) => s.name));
-
+    // Fetch trading accounts with their associated trading symbols
     const accounts = await fetchItems<Account[]>("trading_accounts", {
       filter: {
         status: { _eq: "active" },
       },
       limit: -1,
-      fields: ["*"],
+      fields: ["*", "trading_symbols.trading_symbols_id.*"],
     });
+
+    // Collect all unique symbols across all accounts
+    const allSymbols = new Set<string>();
+    const accountSymbolsMap = new Map<string, Set<string>>();
+
+    accounts.forEach((account) => {
+      const accountSymbols = new Set<string>(
+        account.trading_symbols
+          ?.filter((ts) => ts.trading_symbols_id?.status === "published")
+          .map((ts) => ts.trading_symbols_id.name) || []
+      );
+      accountSymbolsMap.set(account.id, accountSymbols);
+      accountSymbols.forEach((symbol) => allSymbols.add(symbol));
+    });
+
+    // Fetch prices for all symbols once (in parallel) - this is much more efficient
+    const priceMap = new Map<string, number | null>();
+
+    // For now, we'll fetch from Redis (prices are updated by backend-cron)
+    // We could also fetch from exchange APIs here, but Redis is faster and already updated
+    const pricePromises = Array.from(allSymbols).map(async (symbol) => {
+      try {
+        const client = getRedisClient();
+        // Try OKX format first
+        const okxSymbol = convertSymbolFormat(symbol, "okx");
+        let redisKey = `hypotomuai:okx:price:${okxSymbol}`;
+        let cachedPrice = await client.get(redisKey);
+
+        if (cachedPrice) {
+          const priceData = JSON.parse(cachedPrice);
+          priceMap.set(symbol, priceData.price || null);
+          return;
+        }
+
+        // Try AsterDex format
+        redisKey = `hypotomuai:asterdex:price:${symbol}`;
+        cachedPrice = await client.get(redisKey);
+
+        if (cachedPrice) {
+          priceMap.set(symbol, Number(cachedPrice));
+          return;
+        }
+
+        console.warn(`[Monitor] No price found in Redis for ${symbol}`);
+        priceMap.set(symbol, null);
+      } catch (error) {
+        console.error(`[Monitor] Error fetching price for ${symbol}:`, error);
+        priceMap.set(symbol, null);
+      }
+    });
+
+    await Promise.all(pricePromises);
 
     // Process all accounts in parallel for much better performance
     const accountPromises = accounts.map(async (account) => {
       try {
+        // Get pre-computed account symbols
+        const accountSymbols = accountSymbolsMap.get(account.id) || new Set<string>();
+
         const exchange = account.exchange || "okx";
         const apiKey = account.api_key || process.env.OKX_API_KEY;
         const apiSecret = account.api_secret || process.env.OKX_API_SECRET;
@@ -458,7 +502,8 @@ export async function GET() {
           const accountData = await processAsterdexAccount(
             asterdex,
             account,
-            publishedSymbols
+            accountSymbols,
+            priceMap
           );
           return accountData;
         } else {
@@ -480,8 +525,6 @@ export async function GET() {
           // Get positions from Redis (updated by backend-cron every 2 minutes)
           const positionsSnapshot = await getLatestPositions(account.id);
           const positions = positionsSnapshot?.data?.positions || [];
-
-          console.log(`[OKX] Retrieved ${positions.length} positions from Redis for account ${account.id}`);
 
           const balance = await getAccountBalance(okx);
 
@@ -516,7 +559,6 @@ export async function GET() {
 
             // Convert OKX symbol to AsterDex format for grouping (ETH-USDT-SWAP -> ETHUSDT)
             const normalizedSymbol = convertSymbolFormat(okxSymbol, "asterdex");
-            console.log(`[OKX] Position symbol normalization: ${okxSymbol} -> ${normalizedSymbol}`);
 
             if (!positionsBySymbol.has(normalizedSymbol)) {
               positionsBySymbol.set(normalizedSymbol, []);
@@ -524,12 +566,10 @@ export async function GET() {
             positionsBySymbol.get(normalizedSymbol)!.push(pos);
           }
 
-          console.log(`[OKX] Grouped positions by symbols:`, Array.from(positionsBySymbol.keys()));
-
-          // Get all symbols to check (positions + published symbols)
+          // Get all symbols to check (positions + account-specific symbols)
           const symbolsToCheck = new Set<string>([
             ...Array.from(positionsBySymbol.keys()),
-            ...publishedSymbols,
+            ...accountSymbols,
           ]);
 
           // If no symbols to check, return empty array
@@ -537,18 +577,29 @@ export async function GET() {
             return [];
           }
 
+          // Fetch instrument info ONCE for the first symbol and reuse for all
+          // (All USDT-SWAP contracts have same specifications)
+          let sharedInstrumentInfo: any = null;
+          if (symbolsToCheck.size > 0) {
+            const firstSymbol = Array.from(symbolsToCheck)[0];
+            const firstOkxSymbol = convertSymbolFormat(firstSymbol, "okx");
+            try {
+              sharedInstrumentInfo = await getInstrumentInfo(okx, firstOkxSymbol);
+            } catch (error) {
+              console.error(`[OKX] Error fetching instrument info for ${firstSymbol}:`, error);
+            }
+          }
+
           // Create a card for each symbol
           const symbolResults = [];
           for (const symbol of symbolsToCheck) {
             const symbolPositions = positionsBySymbol.get(symbol) || [];
             try {
-              // Convert symbol to OKX format if needed (ETHUSDT -> ETH-USDT-SWAP)
-              const okxSymbol = convertSymbolFormat(symbol, "okx");
-              console.log(`[OKX] Symbol conversion: ${symbol} -> ${okxSymbol}`);
+              // Get pre-fetched price from the price map
+              const currentPrice = priceMap.get(symbol) || null;
 
-              const currentPrice = await getTickerPrice(okx, okxSymbol);
-              const instrumentInfo = await getInstrumentInfo(okx, okxSymbol);
-              const ctVal = instrumentInfo?.ctVal || 1;
+              // Use shared instrument info (fetched once for all symbols)
+              const ctVal = sharedInstrumentInfo?.ctVal || 1;
 
               // Get grid levels from Redis for this symbol (both sides in parallel)
               const { buy: buyGridLevels, sell: sellGridLevels } =
@@ -562,14 +613,14 @@ export async function GET() {
                   const sizeUSD = (level as any).sizeUSD || 0;
                   const price = level.price || 0;
                   return {
-                    price: price,
+                    price: formatPrice(price),
                     size: sizeContracts,
                     value: sizeUSD,
                     orderId: `grid_buy_${idx}`,
                     instId: symbol,
                   };
                 })
-                .sort((a, b) => b.price - a.price);
+                .sort((a, b) => (b.price || 0) - (a.price || 0));
 
               const sellOrders = sellGridLevels
                 .filter((level) => level.status === "pending")
@@ -578,35 +629,41 @@ export async function GET() {
                   const sizeUSD = (level as any).sizeUSD || 0;
                   const price = level.price || 0;
                   return {
-                    price: price,
+                    price: formatPrice(price),
                     size: sizeContracts,
                     value: sizeUSD,
                     orderId: `grid_sell_${idx}`,
                     instId: symbol,
                   };
                 })
-                .sort((a, b) => a.price - b.price);
+                .sort((a, b) => (a.price || 0) - (b.price || 0));
 
-              console.log(
-                `[OKX] Final buy orders for ${symbol}:`,
-                JSON.stringify(buyOrders)
-              );
-              console.log(
-                `[OKX] Final sell orders for ${symbol}:`,
-                JSON.stringify(sellOrders)
-              );
-
-              // Skip if no positions AND no grid levels
+              // Only skip if symbol has no positions, no grid levels, AND no current price
+              // This ensures we still show mid price for published symbols even without positions
               if (
                 symbolPositions.length === 0 &&
                 buyOrders.length === 0 &&
-                sellOrders.length === 0
+                sellOrders.length === 0 &&
+                currentPrice === null
               ) {
                 continue;
               }
 
-              console.log(
-                `[OKX] Adding symbol result for ${symbol}: currentPrice=${currentPrice}`
+              const positions = symbolPositions.map((pos: any) => ({
+                side: Number(pos.pos) > 0 ? "LONG" : "SHORT",
+                contracts: Math.abs(Number(pos.pos)),
+                avgPrice: Number(pos.avgPx),
+                unrealizedPnL: Number(pos.upl),
+                unrealizedPnLRatio: Number(pos.uplRatio) * 100,
+                leverage: Number(pos.lever),
+                notionalUsd: Math.abs(Number(pos.notionalUsd)),
+                instId: pos.instId,
+              }));
+
+              // Calculate total position value for sorting
+              const totalPositionValue = positions.reduce(
+                (sum, pos) => sum + pos.notionalUsd,
+                0
               );
 
               symbolResults.push({
@@ -614,7 +671,7 @@ export async function GET() {
                 accountName: account.name || account.id,
                 symbol: symbol,
                 exchange: "okx",
-                currentPrice: currentPrice,
+                currentPrice: formatPrice(currentPrice),
                 balance: balance
                   ? {
                       equity: balance.totalEquity,
@@ -626,18 +683,10 @@ export async function GET() {
                       equity24hChangePercent: equity24hChangePercent,
                     }
                   : null,
-                positions: symbolPositions.map((pos: any) => ({
-                  side: Number(pos.pos) > 0 ? "LONG" : "SHORT",
-                  contracts: Math.abs(Number(pos.pos)),
-                  avgPrice: Number(pos.avgPx),
-                  unrealizedPnL: Number(pos.upl),
-                  unrealizedPnLRatio: Number(pos.uplRatio) * 100,
-                  leverage: Number(pos.lever),
-                  notionalUsd: Math.abs(Number(pos.notionalUsd)),
-                  instId: pos.instId,
-                })),
+                positions: positions,
                 buyOrders: buyOrders,
                 sellOrders: sellOrders,
+                totalPositionValue: totalPositionValue,
               });
             } catch (symbolError: any) {
               console.error(`Error processing symbol ${symbol}:`, symbolError);
@@ -665,18 +714,16 @@ export async function GET() {
     // Flatten the results (each account returns an array)
     const allData = accountResults.flat();
 
-    // Filter to only include published symbols
-    const filteredData = allData.filter(
-      (account) =>
-        account.symbol === "ERROR" ||
-        account.symbol === "N/A" ||
-        publishedSymbols.has(account.symbol)
-    );
+    // Sort by total position value (biggest first)
+    const sortedData = allData.sort((a, b) => {
+      const aValue = (a as any).totalPositionValue || 0;
+      const bValue = (b as any).totalPositionValue || 0;
+      return bValue - aValue; // Descending order
+    });
 
     return NextResponse.json({
       timestamp: new Date().toISOString(),
-      accounts: filteredData,
-      publishedSymbols: Array.from(publishedSymbols),
+      accounts: sortedData,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

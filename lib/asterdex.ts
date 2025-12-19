@@ -73,7 +73,6 @@ export class AsterdexClient {
           error.response?.data?.msg?.includes("recvWindow");
 
         if (isTimestampError && attempt < maxRetries) {
-          console.log(`[Asterdex] Timestamp error, retrying (attempt ${attempt + 1}/${maxRetries})...`);
           // Wait a bit before retrying
           await new Promise(resolve => setTimeout(resolve, 100));
           continue;
@@ -250,13 +249,8 @@ export class AsterdexClient {
         .map((key) => `${key}=${params[key]}`)
         .join("&");
 
-      console.log(`[Asterdex] getUserTrades params:`, params);
-      console.log(`[Asterdex] getUserTrades queryString:`, queryString);
-
       const signature = this.generateSignature(queryString);
       const finalQueryString = queryString + `&signature=${signature}`;
-
-      console.log(`[Asterdex] getUserTrades finalQueryString:`, finalQueryString);
 
       const path = "/fapi/v1/userTrades";
       const headers = this.getHeaders();
