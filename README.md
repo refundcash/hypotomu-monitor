@@ -24,9 +24,8 @@ open http://localhost:3000
 - ✅ **Multi-Exchange Support** - AsterDex & OKX (Phase 2 complete)
 - ✅ **Real-time Monitoring** - Live positions, orders, equity tracking
 - ✅ **Grid Trading Visualization** - Display and manage grid levels
-- ✅ **External RESTful API** - Third-party integrations via API keys
 - ✅ **Automated Data Collection** - Vercel cron jobs (every 1 min)
-- ✅ **Secure Authentication** - NextAuth.js for dashboard, API keys for external access
+- ✅ **Secure Authentication** - NextAuth.js for dashboard
 
 ## Architecture
 
@@ -54,9 +53,6 @@ REDIS_URL=redis://default:password@host:port/db
 BACKEND_CRON_URL=http://backend-cron-server:3001
 WEBHOOK_API_KEY=shared-secret-key
 
-# External API
-API_KEYS=comma,separated,api,keys
-
 # NextAuth
 NEXTAUTH_SECRET=random-secret-for-jwt
 NEXTAUTH_URL=https://your-monitor-domain.com
@@ -72,8 +68,6 @@ ADMIN_PASSWORD=secure-password
 monitor/
 ├── app/
 │   ├── api/
-│   │   ├── v1/              # External API (positions, orders, accounts)
-│   │   ├── cron/            # Vercel cron jobs
 │   │   ├── monitor/         # Dashboard data endpoint
 │   │   └── auth/            # NextAuth routes
 │   ├── page.tsx             # Main dashboard UI
@@ -84,8 +78,7 @@ monitor/
 │   ├── asterdex.ts          # AsterDex API client
 │   ├── okx.ts               # OKX API client
 │   ├── backend-cron-client.ts  # Backend-cron wrapper
-│   ├── directus.ts          # Directus client
-│   └── api-auth.ts          # API key auth
+│   └── directus.ts          # Directus client
 ├── components/              # React components
 ├── docs/                    # Detailed documentation
 └── README.md               # This file
@@ -98,17 +91,6 @@ monitor/
 - `POST /api/close-position` - Close position
 - `POST /api/cancel-order` - Cancel order
 - `POST /api/delete-grid-level` - Delete grid level
-
-### External API (v1)
-- `GET /api/v1/accounts` - List trading accounts
-- `GET /api/v1/positions` - Get position snapshots
-- `GET /api/v1/orders` - Get order snapshots
-
-**Authentication:** Include `x-api-key` header
-
-### Cron Jobs
-- `/api/cron/positions-snapshot` - Every 1 minute
-- `/api/cron/equity-snapshot` - Every 10 minutes
 
 ## Multi-Exchange Support (Phase 2)
 
@@ -172,26 +154,6 @@ Defined in `vercel.json`:
 
 **Note:** Cron jobs only work in Vercel production environment.
 
-## External API Usage
-
-### Get All Positions
-```bash
-curl -H "x-api-key: your-api-key" \
-  https://your-monitor.vercel.app/api/v1/positions
-```
-
-### Get Specific Account
-```bash
-curl -H "x-api-key: your-api-key" \
-  "https://your-monitor.vercel.app/api/v1/positions?accountId=123"
-```
-
-### Filter by Exchange
-```bash
-curl -H "x-api-key: your-api-key" \
-  "https://your-monitor.vercel.app/api/v1/positions?exchange=okx"
-```
-
 ## Development
 
 ### Run Tests
@@ -236,17 +198,11 @@ curl $DIRECTUS_URL/items/trading_accounts \
 - **Cause:** Cron jobs only work in Vercel production
 - **Fix:** Deploy to Vercel, check logs in dashboard
 
-### External API Returns 401
-- **Cause:** Invalid or missing API key
-- **Fix:** Verify `x-api-key` header matches `API_KEYS` env var
-
 ## Documentation
 
 ### Detailed Guides
-- [External API Documentation](./docs/EXTERNAL_API.md)
 - [AsterDex Integration Guide](./docs/ASTERDEX_INTEGRATION.md)
 - [Cron Jobs Documentation](./docs/CRON_JOBS.md)
-- [API Data Fields Reference](./docs/API_DATA_FIELDS.md)
 
 ### Project Plans
 - [Monitor Overview](../plans/251214-monitor-overview.md)

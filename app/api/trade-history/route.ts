@@ -3,7 +3,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { fetchItems } from "@/lib/directus";
 import { AsterdexClient } from "@/lib/asterdex";
-import { validateApiKey } from "@/lib/api-auth";
 import { getLatestTradeHistory } from "@/lib/redis";
 
 interface Account {
@@ -18,11 +17,10 @@ interface Account {
 
 export async function GET(request: Request) {
   try {
-    // Check for either NextAuth session OR API key
+    // Check for NextAuth session
     const session = await getServerSession(authOptions);
-    const hasValidApiKey = validateApiKey(request);
 
-    if (!session && !hasValidApiKey) {
+    if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

@@ -412,10 +412,11 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Fetch trading accounts with their associated trading symbols
+    // Fetch trading accounts with their associated trading symbols (OKX only)
     const accounts = await fetchItems<Account[]>("trading_accounts", {
       filter: {
         status: { _eq: "active" },
+        exchange: { _eq: "okx" },
       },
       limit: -1,
       fields: ["*", "trading_symbols.trading_symbols_id.*"],
