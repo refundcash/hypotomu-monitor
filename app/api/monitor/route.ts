@@ -9,6 +9,7 @@ import {
   getEquity24hAgo,
   getGridLevels,
   getGridLevelsBothSides,
+  batchGetGridLevelsBothSides,
   setMarketPrice,
   getRedisClient,
   getLatestPositions,
@@ -461,21 +462,7 @@ export async function GET() {
           );
           return accountData;
         } else {
-          // Default to OKX
-          if (!apiKey || !apiSecret || !passphrase) {
-            return [
-              {
-                accountId: account.id,
-                accountName: account.name || account.id,
-                symbol: "N/A",
-                exchange: "okx",
-                error: "Missing API credentials",
-              },
-            ];
-          }
-
-          const okx = new OKXClient(apiKey, apiSecret, passphrase);
-
+          // Default to OKX - data is fetched from Redis (updated by backend-cron)
           // Get positions from Redis (updated by backend-cron every 2 minutes)
           const positionsSnapshot = await getLatestPositions(account.id);
           const positions = positionsSnapshot?.data?.positions || [];
@@ -533,33 +520,21 @@ export async function GET() {
             return [];
           }
 
-          // Fetch instrument info ONCE for the first symbol and reuse for all
-          // (All USDT-SWAP contracts have same specifications)
-          let sharedInstrumentInfo: any = null;
-          if (symbolsToCheck.size > 0) {
-            const firstSymbol = Array.from(symbolsToCheck)[0];
-            const firstOkxSymbol = convertSymbolFormat(firstSymbol, "okx");
-            try {
-              sharedInstrumentInfo = await getInstrumentInfo(okx, firstOkxSymbol);
-            } catch (error) {
-              console.error(`[OKX] Error fetching instrument info for ${firstSymbol}:`, error);
-            }
-          }
+          // Batch fetch all grid levels for all symbols in a single Redis pipeline
+          const symbolsArray = Array.from(symbolsToCheck);
+          const gridLevelsMap = await batchGetGridLevelsBothSides(account.id, symbolsArray, "okx");
 
-          // Create a card for each symbol
-          const symbolResults = [];
-          for (const symbol of symbolsToCheck) {
+          // Process all symbols in parallel (not sequentially)
+          const symbolPromises = symbolsArray.map(async (symbol) => {
             const symbolPositions = positionsBySymbol.get(symbol) || [];
             try {
               // Get pre-fetched price from the price map
               const currentPrice = priceMap.get(symbol) || null;
 
-              // Use shared instrument info (fetched once for all symbols)
-              const ctVal = sharedInstrumentInfo?.ctVal || 1;
-
-              // Get grid levels from Redis for this symbol (both sides in parallel)
-              const { buy: buyGridLevels, sell: sellGridLevels } =
-                await getGridLevelsBothSides(account.id, symbol, "okx");
+              // Get pre-fetched grid levels from batch result
+              const gridLevels = gridLevelsMap.get(symbol) || { buy: [], sell: [] };
+              const buyGridLevels = gridLevels.buy;
+              const sellGridLevels = gridLevels.sell;
 
               // Filter to only pending grid levels and convert to order format
               const buyOrders = buyGridLevels
@@ -595,14 +570,13 @@ export async function GET() {
                 .sort((a, b) => (a.price || 0) - (b.price || 0));
 
               // Only skip if symbol has no positions, no grid levels, AND no current price
-              // This ensures we still show mid price for published symbols even without positions
               if (
                 symbolPositions.length === 0 &&
                 buyOrders.length === 0 &&
                 sellOrders.length === 0 &&
                 currentPrice === null
               ) {
-                continue;
+                return null;
               }
 
               const positions = symbolPositions.map((pos: any) => ({
@@ -622,7 +596,7 @@ export async function GET() {
                 0
               );
 
-              symbolResults.push({
+              return {
                 accountId: account.id,
                 accountName: account.name || account.id,
                 symbol: symbol,
@@ -643,14 +617,18 @@ export async function GET() {
                 buyOrders: buyOrders,
                 sellOrders: sellOrders,
                 totalPositionValue: totalPositionValue,
-              });
+              };
             } catch (symbolError: any) {
               console.error(`Error processing symbol ${symbol}:`, symbolError);
-              // Continue with other symbols
+              return null;
             }
-          }
+          });
 
-          return symbolResults;
+          // Wait for all symbols to be processed in parallel
+          const symbolResults = await Promise.all(symbolPromises);
+
+          // Filter out null results
+          return symbolResults.filter((result) => result !== null);
         }
       } catch (error: any) {
         return [

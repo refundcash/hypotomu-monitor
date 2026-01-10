@@ -378,7 +378,10 @@ export default function HomePage() {
                 type="text"
                 placeholder="Search by symbol or account name..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
                 className="w-full px-4 py-2 pl-10 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <svg
@@ -797,6 +800,27 @@ export default function HomePage() {
                               </div>
                               <div className="text-xs text-muted-foreground mt-1">
                                 Margin
+                              </div>
+                            </div>
+                            <div className="flex-1 min-w-[120px]">
+                              <div className="text-xs text-muted-foreground mb-1.5">
+                                Position Ratio
+                              </div>
+                              <div className="text-xl font-bold text-green-600">
+                                {account.balance.equity > 0
+                                  ? (
+                                      (account.positions.reduce(
+                                        (sum, pos) => sum + Math.abs(pos.notionalUsd),
+                                        0
+                                      ) /
+                                        account.balance.equity) *
+                                      100
+                                    ).toFixed(1)
+                                  : "0.0"}
+                                %
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                Value/Equity
                               </div>
                             </div>
                           </div>

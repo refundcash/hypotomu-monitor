@@ -645,6 +645,81 @@ export async function getGridLevelsBothSides(
 }
 
 /**
+ * Batch get grid levels for multiple symbols (both buy and sell) using Redis pipeline
+ * Much faster than calling getGridLevelsBothSides multiple times
+ */
+export async function batchGetGridLevelsBothSides(
+  accountId: string,
+  symbols: string[],
+  exchange: string = "asterdex"
+): Promise<Map<string, { buy: GridLevel[]; sell: GridLevel[] }>> {
+  const client = getRedisClient();
+  const results = new Map<string, { buy: GridLevel[]; sell: GridLevel[] }>();
+
+  if (symbols.length === 0) {
+    return results;
+  }
+
+  // Create pipeline for batch operations
+  const pipeline = client.pipeline();
+
+  // Add all HGETALL commands to pipeline (buy and sell for each symbol)
+  for (const symbol of symbols) {
+    pipeline.hgetall(`hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:BUY`);
+    pipeline.hgetall(`hypotomuai:${exchange}:mmgrid:${accountId}:${symbol}:SELL`);
+  }
+
+  try {
+    // Execute all commands in a single round-trip
+    const pipelineResults = await pipeline.exec();
+
+    if (!pipelineResults) {
+      return results;
+    }
+
+    // Process results (every 2 results = 1 symbol: buy, sell)
+    for (let i = 0; i < symbols.length; i++) {
+      const symbol = symbols[i];
+      const buyResult = pipelineResults[i * 2];
+      const sellResult = pipelineResults[i * 2 + 1];
+
+      const parseLevels = (result: [Error | null, unknown] | undefined): GridLevel[] => {
+        if (!result) return [];
+        const [error, data] = result;
+        if (error || !data || Object.keys(data as object).length === 0) return [];
+
+        const levels: GridLevel[] = [];
+        const levelKeys = Object.keys(data as object).sort((a, b) => {
+          const numA = parseInt(a.split("_")[1]);
+          const numB = parseInt(b.split("_")[1]);
+          return numA - numB;
+        });
+
+        for (const levelKey of levelKeys) {
+          try {
+            const levelData = JSON.parse((data as Record<string, string>)[levelKey]);
+            levels.push(levelData);
+          } catch (e) {
+            // Skip invalid levels
+          }
+        }
+        return levels;
+      };
+
+      results.set(symbol, {
+        buy: parseLevels(buyResult),
+        sell: parseLevels(sellResult),
+      });
+    }
+
+    return results;
+  } catch (error) {
+    console.error(`Error in batch get grid levels:`, error);
+    return results;
+  }
+}
+
+/**
  * Account Balance Interface
  * Normalized structure for both OKX and AsterDex balance data
  */
