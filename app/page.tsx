@@ -296,11 +296,22 @@ export default function HomePage() {
     setCurrentPage(1);
   }, []);
 
+  // Helper function to calculate position ratio for an account
+  const getPositionRatio = useCallback((account: Account): number => {
+    if (!account.balance || account.balance.equity <= 0) return 0;
+    const totalNotional = account.positions.reduce(
+      (sum, pos) => sum + Math.abs(pos.notionalUsd),
+      0
+    );
+    return (totalNotional / account.balance.equity) * 100;
+  }, []);
+
   // Filter accounts based on search query, selected symbols, and exchanges - memoized for performance
+  // Sorted by Position Ratio (high to low)
   const filteredAccounts = useMemo(() => {
     if (!data?.accounts) return [];
 
-    return data.accounts.filter((account) => {
+    const filtered = data.accounts.filter((account) => {
       // Filter by selected symbols
       if (selectedSymbols.size > 0 && !selectedSymbols.has(account.symbol)) {
         return false;
@@ -324,7 +335,10 @@ export default function HomePage() {
 
       return matchesName || matchesSymbol || matchesExchange;
     });
-  }, [data?.accounts, selectedSymbols, selectedExchanges, searchQuery]);
+
+    // Sort by Position Ratio (high to low)
+    return filtered.sort((a, b) => getPositionRatio(b) - getPositionRatio(a));
+  }, [data?.accounts, selectedSymbols, selectedExchanges, searchQuery, getPositionRatio]);
 
   // Paginated accounts - memoized for performance
   const paginatedAccounts = useMemo(() => {
