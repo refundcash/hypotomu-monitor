@@ -332,8 +332,9 @@ export default function HomePage() {
       const matchesName = account.accountName.toLowerCase().includes(query);
       const matchesSymbol = account.symbol.toLowerCase().includes(query);
       const matchesExchange = account.exchange?.toLowerCase().includes(query);
+      const matchesAccountId = account.accountId.toLowerCase().includes(query);
 
-      return matchesName || matchesSymbol || matchesExchange;
+      return matchesName || matchesSymbol || matchesExchange || matchesAccountId;
     });
 
     // Sort by Position Ratio (high to low)
@@ -390,7 +391,7 @@ export default function HomePage() {
             <div className="relative flex-1 max-w-md">
               <input
                 type="text"
-                placeholder="Search by symbol or account name..."
+                placeholder="Search by name, symbol, or account ID..."
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
